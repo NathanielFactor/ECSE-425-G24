@@ -32,14 +32,15 @@ architecture arch of cache is
 	constant NUM_BLOCKS    : integer := 32;
 	constant WORDS_PER_BLK : integer := 4;
 	constant BYTES_PER_BLK : integer := 16;
+	constant TAG_BITS      : integer := 6;
 
-	type data_array_t is array (0 to NUM_BLOCKS-1) of std_logic_vector(128-1 downto 0);
-	type tag_array_t  is array (0 to NUM_BLOCKS-1) of std_logic_vector(5 downto 0);
+	type block_store_t is array (0 to NUM_BLOCKS-1) of std_logic_vector(127 downto 0);
+	type tag_store_t   is array (0 to NUM_BLOCKS-1) of std_logic_vector(TAG_BITS-1 downto 0);
 
-	signal data_array  : data_array_t;
-	signal tag_array   : tag_array_t;
-	signal valid_array : std_logic_vector(NUM_BLOCKS-1 downto 0) := (others => '0');
-	signal dirty_array : std_logic_vector(NUM_BLOCKS-1 downto 0) := (others => '0');
+	signal blocks : block_store_t;
+	signal tags   : tag_store_t;
+	signal valid  : std_logic_vector(NUM_BLOCKS-1 downto 0) := (others => '0');
+	signal dirty  : std_logic_vector(NUM_BLOCKS-1 downto 0) := (others => '0');
 
 
 	type state_t is (IDLE, COMPARE_TAG, WRITEBACK, WRITEBACK_WAIT,
@@ -48,7 +49,7 @@ architecture arch of cache is
 
 	signal byte_counter : integer range 0 to BYTES_PER_BLK-1 := 0;
 
-	signal reg_tag    : std_logic_vector(5 downto 0);
+	signal reg_tag    : std_logic_vector(TAG_BITS-1 downto 0);
 	signal reg_index  : integer range 0 to NUM_BLOCKS-1;
 	signal reg_offset : integer range 0 to WORDS_PER_BLK-1;
 	signal reg_write  : std_logic;
@@ -57,11 +58,11 @@ architecture arch of cache is
 	signal wb_base_addr   : integer range 0 to ram_size-1;
 	signal alloc_base_addr: integer range 0 to ram_size-1;
 
-	signal block_buf : std_logic_vector(127 downto 0) := (others => '0');
+	signal line_buf : std_logic_vector(127 downto 0) := (others => '0');
 
 begin
 	cache_fsm: process(clock, reset)
-		variable v_block_data : std_logic_vector(127 downto 0);
+		variable v_line : std_logic_vector(127 downto 0);
 		variable word_hi, word_lo : integer;
 	begin
 		if reset = '1' then
@@ -73,9 +74,9 @@ begin
 			m_writedata <= (others => '0');
 			s_readdata <= (others => '0');
 			byte_counter <= 0;
-			valid_array <= (others => '0');
-			dirty_array <= (others => '0');
-			block_buf <= (others => '0');
+			valid <= (others => '0');
+			dirty <= (others => '0');
+			line_buf <= (others => '0');
 
 		elsif rising_edge(clock) then
 			case state is
@@ -97,14 +98,14 @@ begin
 				when COMPARE_TAG =>
 					word_lo := reg_offset * 32;
 					word_hi := word_lo + 31;
-					if valid_array(reg_index) = '1' and tag_array(reg_index) = reg_tag then
+					if valid(reg_index) = '1' and tags(reg_index) = reg_tag then
 						if reg_write = '1' then
-							v_block_data := data_array(reg_index);
-							v_block_data(word_hi downto word_lo) := reg_wdata;
-							data_array(reg_index) <= v_block_data;
-							dirty_array(reg_index) <= '1';
+							v_line := blocks(reg_index);
+							v_line(word_hi downto word_lo) := reg_wdata;
+							blocks(reg_index) <= v_line;
+							dirty(reg_index) <= '1';
 						else
-							s_readdata <= data_array(reg_index)(word_hi downto word_lo);
+							s_readdata <= blocks(reg_index)(word_hi downto word_lo);
 						end if;
 						s_waitrequest <= '0';
 						state <= DELIVER;
@@ -115,13 +116,13 @@ begin
 							to_unsigned(reg_index, 5) & 
 							"0000"
 						);
-						if valid_array(reg_index) = '1' and dirty_array(reg_index) = '1' then
+						if valid(reg_index) = '1' and dirty(reg_index) = '1' then
 							wb_base_addr <= to_integer(
-								unsigned(tag_array(reg_index)) & 
+								unsigned(tags(reg_index)) & 
 								to_unsigned(reg_index, 5) & 
 								"0000"
 							);
-							block_buf <= data_array(reg_index);
+							line_buf <= blocks(reg_index);
 							byte_counter <= 0;
 							state <= WRITEBACK;
 						else
@@ -132,7 +133,7 @@ begin
 
 				when WRITEBACK =>
 					m_addr <= wb_base_addr + byte_counter;
-					m_writedata <= block_buf(
+					m_writedata <= line_buf(
 						(byte_counter * 8 + 7) downto (byte_counter * 8)
 					);
 					m_write <= '1';
@@ -158,28 +159,27 @@ begin
 				when ALLOCATE_WAIT =>
 					if m_waitrequest = '0' then
 						m_read <= '0';
-						v_block_data := block_buf;
-						v_block_data(
+						v_line := line_buf;
+						v_line(
 							(byte_counter * 8 + 7) downto (byte_counter * 8)
 						) := m_readdata;
-						block_buf <= v_block_data;
+						line_buf <= v_line;
 
 						if byte_counter = BYTES_PER_BLK - 1 then
-							tag_array(reg_index)   <= reg_tag;
-							valid_array(reg_index)  <= '1';
+							tags(reg_index)  <= reg_tag;
+							valid(reg_index) <= '1';
 							word_lo := reg_offset * 32;
 							word_hi := word_lo + 31;
 
 							if reg_write = '1' then
-								v_block_data(word_hi downto word_lo) := reg_wdata;
-								data_array(reg_index) <= v_block_data;
-								dirty_array(reg_index) <= '1';
+								v_line(word_hi downto word_lo) := reg_wdata;
+								dirty(reg_index) <= '1';
 							else
-								data_array(reg_index) <= v_block_data;
-								dirty_array(reg_index) <= '0';
-								s_readdata <= v_block_data(word_hi downto word_lo);
+								dirty(reg_index) <= '0';
+								s_readdata <= v_line(word_hi downto word_lo);
 							end if;
 
+							blocks(reg_index) <= v_line;
 							s_waitrequest <= '0';
 							state <= DELIVER;
 						else
