@@ -48,6 +48,8 @@ architecture arch of processor is
 
     -- NOP encoding: addi x0, x0, 0
     constant NOP : std_logic_vector(31 downto 0) := x"00000013";
+
+    --init commit
 begin
 
 end arch;
