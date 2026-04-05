@@ -343,5 +343,35 @@ begin
             stall => stall_sig, 
             flush => flush_sig
         );
+        
+    -- ####################################################################
+    --                 STAGE 1: INSTRUCTION FETCH (IF)
+    -- ####################################################################
+
+    -- PC next mux: flush target > stall hold > sequential + 4
+    pc_next_mux: process(pc, stall_sig, flush_sig, exmem_alu)
+    begin
+        if flush_sig = '1' then
+            pc_nxt <= unsigned(exmem_alu);
+        elsif stall_sig = '1' then
+            pc_nxt <= pc;
+        else
+            pc_nxt <= pc + 4;
+        end if;
+    end process;
+
+    -- Drive instruction memory address from current PC
+    -- (memory registers this on rising_edge, readdata available after)
+    imem_addr_driver: process(prog_loading, pc)
+        variable widx : integer;
+    begin
+        if prog_loading = '0' then
+            widx := to_integer(pc(11 downto 2));
+            for k in 0 to 3 loop
+                imem_addr(k) <= widx;
+                imem_re(k)   <= '1';
+            end loop;
+        end if;
+    end process;
 
 end arch;
