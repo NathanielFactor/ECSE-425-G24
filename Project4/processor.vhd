@@ -369,9 +369,111 @@ begin
             widx := to_integer(pc(11 downto 2));
             for k in 0 to 3 loop
                 imem_addr(k) <= widx;
-                imem_re(k)   <= '1';
+                imem_re(k) <= '1';
             end loop;
         end if;
+    end process;
+
+    -- ####################################################################
+    --                 STAGE 4: MEMORY ACCESS (MEM)
+    -- ####################################################################
+
+    -- Data memory bank address/data driver for loads and stores
+    dmem_driver: process(exmem_ir, exmem_alu, exmem_b, idex_ir, ex_alu_result, prog_loading)
+        variable op       : std_logic_vector(6 downto 0);
+        variable word_idx : integer;
+        variable byte_off : integer;
+    begin
+        -- Default: all banks idle
+        for k in 0 to 3 loop
+            dmem_addr(k) <= 0;
+            dmem_wdata(k) <= (others => '0');
+            dmem_we(k) <= '0';
+            dmem_re(k) <= '0';
+        end loop;
+
+        if prog_loading = '0' then
+            op := f_opcode(exmem_ir);
+
+            -- ---- STORES: write bytes to appropriate banks ----
+            if op = OP_STORE then
+                word_idx := to_integer(unsigned(exmem_alu(14 downto 2)));
+                byte_off := to_integer(unsigned(exmem_alu(1 downto 0)));
+                case f_funct3(exmem_ir) is
+                    when "000" =>  -- SB: 1 byte
+                        dmem_addr(byte_off) <= word_idx;
+                        dmem_wdata(byte_off) <= exmem_b(7 downto 0);
+                        dmem_we(byte_off) <= '1';
+                    when "001" =>  -- SH: 2 bytes
+                        dmem_addr(byte_off) <= word_idx;
+                        dmem_wdata(byte_off) <= exmem_b(7 downto 0);
+                        dmem_we(byte_off) <= '1';
+                        dmem_addr(byte_off + 1) <= word_idx;
+                        dmem_wdata(byte_off + 1) <= exmem_b(15 downto 8);
+                        dmem_we(byte_off + 1) <= '1';
+                    when "010" =>  -- SW: 4 bytes
+                        for k in 0 to 3 loop
+                            dmem_addr(k) <= word_idx;
+                            dmem_wdata(k) <= exmem_b(k*8+7 downto k*8);
+                            dmem_we(k) <= '1';
+                        end loop;
+                    when others => null;
+                end case;
+
+            -- ---- LOADS: pre-fetch from EX stage (1 cycle early) ----
+            else
+                if f_opcode(idex_ir) = OP_LOAD then
+                    -- Address from EX ALU result (available combinationally)
+                    word_idx := to_integer(unsigned(ex_alu_result(14 downto 2)));
+                    for k in 0 to 3 loop
+                        dmem_addr(k) <= word_idx;
+                        dmem_re(k) <= '1';
+                    end loop;
+                elsif op = OP_LOAD then
+                    -- Fallback: address from EX/MEM register
+                    word_idx := to_integer(unsigned(exmem_alu(14 downto 2)));
+                    for k in 0 to 3 loop
+                        dmem_addr(k) <= word_idx;
+                        dmem_re(k) <= '1';
+                    end loop;
+                end if;
+            end if;
+        end if;
+    end process;
+
+    -- Assemble 32-bit load data from memory bank outputs
+    mem_load_assemble: process(exmem_ir, exmem_alu, dmem_rdata)
+        variable f3       : std_logic_vector(2 downto 0);
+        variable byte_off : integer;
+        variable b0, b1   : std_logic_vector(7 downto 0);
+        variable rdata    : std_logic_vector(31 downto 0);
+    begin
+        rdata := (others => '0');
+        if f_opcode(exmem_ir) = OP_LOAD then
+            f3 := f_funct3(exmem_ir);
+            byte_off := to_integer(unsigned(exmem_alu(1 downto 0)));
+            case f3 is
+                when "000" => -- LB: sign-extend byte
+                    b0 := dmem_rdata(byte_off);
+                    rdata := (others => b0(7));
+                    rdata(7 downto 0) := b0;
+                when "100" => -- LBU: zero-extend byte
+                    rdata(7 downto 0) := dmem_rdata(byte_off);
+                when "001" => -- LH: sign-extend half
+                    b0 := dmem_rdata(byte_off);
+                    b1 := dmem_rdata(byte_off + 1);
+                    rdata := (others => b1(7));
+                    rdata(15 downto 0) := b1 & b0;
+                when "101" => -- LHU: zero-extend half
+                    b0 := dmem_rdata(byte_off);
+                    b1 := dmem_rdata(byte_off + 1);
+                    rdata(15 downto 0) := b1 & b0;
+                when "010" => -- LW: full word
+                    rdata := dmem_rdata(3) & dmem_rdata(2) & dmem_rdata(1) & dmem_rdata(0);
+                when others => null;
+            end case;
+        end if;
+        mem_load_data <= rdata;
     end process;
 
 end arch;
