@@ -668,4 +668,65 @@ begin
         wait;
     end process;
 
+    -- ####################################################################
+    --                 OUTPUT DUMP (register_file.txt + memory.txt)
+    -- ####################################################################
+    dump_proc: process
+        file     rf_file : text;
+        file     dm_file : text;
+        variable l       : line;
+        variable w       : std_logic_vector(31 downto 0);
+    begin
+        done <= '0';
+        wait until dump = '1';
+
+        -- Write register_file.txt (32 lines, 32-bit binary)
+        file_open(rf_file, "register_file.txt", WRITE_MODE);
+        for i in 0 to 31 loop
+            -- Drive regfile dump port and read value combinationally
+            rf_dump_addr <= i;
+            wait for 0 ns;  -- combinational settle
+            w := rf_dump_data;
+            -- Write 32-bit value as binary string to file
+            for b in 31 downto 0 loop
+                if w(b) = '1' then
+                    write(l, character'('1'));
+                else
+                    write(l, character'('0'));
+                end if;
+            end loop;
+            writeline(rf_file, l);
+        end loop;
+        file_close(rf_file);
+
+        -- Write memory.txt (8192 lines, read from dmem banks)
+        file_open(dm_file, "memory.txt", WRITE_MODE);
+        for i in 0 to 8191 loop
+            for k in 0 to 3 loop
+                dmem_addr(k) <= i;
+                dmem_re(k) <= '1';
+            end loop;
+            wait until rising_edge(clock);
+            wait for 0 ns;
+            -- w gets 32-bit word assembled from dmem bank outputs
+            w(7 downto 0) := dmem_rdata(0);
+            w(15 downto 8) := dmem_rdata(1);
+            w(23 downto 16) := dmem_rdata(2);
+            w(31 downto 24) := dmem_rdata(3);
+            -- write 32-bit value as binary string to file
+            for b in 31 downto 0 loop
+                if w(b) = '1' then
+                    write(l, character'('1'));
+                else
+                    write(l, character'('0'));
+                end if;
+            end loop;
+            writeline(dm_file, l);
+        end loop;
+        -- close and set done signal high
+        file_close(dm_file);
+        done <= '1';
+        wait;
+    end process;
+
 end arch;
