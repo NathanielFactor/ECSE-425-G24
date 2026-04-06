@@ -608,4 +608,64 @@ begin
         end if;
     end process;
 
+    -- ####################################################################
+    --                 PROGRAM LOADING
+    -- ####################################################################
+    -- Reads program.txt and writes instructions into imem banks.
+    -- Runs at simulation start before reset is released.
+    -- Sets prog_loading = '0' when complete.
+    load_program: process
+        file     f    : text;
+        variable lin  : line;
+        variable s    : string(1 to 32);
+        variable a    : integer := 0;
+        variable w    : std_logic_vector(31 downto 0);
+        variable ok   : boolean;
+        variable widx : integer;
+    begin
+        prog_loading <= '1';
+        file_open(f, "program.txt", READ_MODE);
+        -- Ensure a < INSTR_RAM_SIZE to avoid writing out of bounds if file is too large
+        while not endfile(f) and a < INSTR_RAM_SIZE loop
+            readline(f, lin);
+            if lin'length >= 32 then
+                -- ok := true if we successfully read 32 chars, false otherwise (e.g. blank line)
+                read(lin, s, ok);
+                if ok then
+                    for k in 0 to 31 loop
+                        -- Note: s(1) is the leftmost char, which is the MSB of the instruction word.
+                        if s(k+1) = '1' then
+                            w(31-k) := '1';
+                        else
+                            w(31-k) := '0';
+                        end if;
+                    end loop;
+                    -- widx is the word index in imem (address / 4)
+                    widx := a / 4;
+                    for k in 0 to 3 loop
+                        -- Write byte k of instruction word to bank k at index widx
+                        imem_addr(k) <= widx;
+                        imem_wdata(k) <= w(k*8+7 downto k*8);
+                        imem_we(k) <= '1';
+                    end loop;
+                    wait until rising_edge(clock);
+                    -- De-assert write enable signals before next instruction
+                    for k in 0 to 3 loop
+                        imem_we(k) <= '0';
+                    end loop;
+                    a := a + 4;
+                end if;
+            end if;
+        end loop;
+        -- close file and set imem signals back to idle
+        file_close(f);
+        for k in 0 to 3 loop
+            imem_we(k)   <= '0';
+            imem_addr(k) <= 0;
+        end loop;
+        -- set prog_loading to '0' to allow processor to start executing
+        prog_loading <= '0';
+        wait;
+    end process;
+
 end arch;
