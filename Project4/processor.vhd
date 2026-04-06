@@ -476,4 +476,27 @@ begin
         mem_load_data <= rdata;
     end process;
 
+    -- ####################################################################
+    --                 STAGE 5: WRITE-BACK (WB)
+    -- ####################################################################
+
+    -- Select write-back data: ALU result, load data, or link address
+    wb_select: process(memwb_ir, memwb_alu, memwb_lmd)
+        variable op : std_logic_vector(6 downto 0);
+    begin
+        op := f_opcode(memwb_ir);
+        wb_rd_addr <= f_rd(memwb_ir);
+        wb_wr_en <= '0';
+        wb_rd_data <= memwb_alu;
+
+        if writes_rd(memwb_ir) then
+            wb_wr_en <= '1';
+            if op = OP_LOAD or op = OP_JAL or op = OP_JALR then
+                wb_rd_data <= memwb_lmd;  -- load data or link address
+            else
+                wb_rd_data <= memwb_alu;  -- ALU result
+            end if;
+        end if;
+    end process;
+
 end arch;
