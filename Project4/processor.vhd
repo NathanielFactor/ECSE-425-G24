@@ -484,18 +484,127 @@ begin
     wb_select: process(memwb_ir, memwb_alu, memwb_lmd)
         variable op : std_logic_vector(6 downto 0);
     begin
+        -- Default: no write-back
         op := f_opcode(memwb_ir);
         wb_rd_addr <= f_rd(memwb_ir);
         wb_wr_en <= '0';
         wb_rd_data <= memwb_alu;
 
+        -- for instructions that write to rd, select the correct data source
         if writes_rd(memwb_ir) then
+            -- assert write enable for regfile
             wb_wr_en <= '1';
             if op = OP_LOAD or op = OP_JAL or op = OP_JALR then
                 wb_rd_data <= memwb_lmd;  -- load data or link address
             else
                 wb_rd_data <= memwb_alu;  -- ALU result
             end if;
+        end if;
+    end process;
+
+    -- ####################################################################
+    --                 PIPELINE REGISTER UPDATES
+    -- ####################################################################
+    --
+    -- All pipeline register updates happen synchronously on rising_edge.
+    -- VHDL signal semantics: all reads see values from BEFORE the edge,
+    -- all writes take effect AFTER the process suspends. So ordering
+    -- within this process does not affect correctness.
+
+    pipeline_regs: process(clock, reset)
+    begin
+        -- On reset, clear all pipeline registers to known state (NOPs, zeros).
+        if reset = '1' then
+            pc <= (others => '0');
+            fetch_pc <= (others => '0');
+            -- IF/ID
+            ifid_ir <= NOP;
+            ifid_pc <= (others => '0');
+            ifid_npc <= (others => '0');
+            -- ID/EX
+            idex_ir <= NOP;
+            idex_pc <= (others => '0');
+            idex_npc <= (others => '0');
+            idex_a <= (others => '0');
+            idex_b <= (others => '0');
+            idex_imm <= (others => '0');
+            -- EX/MEM
+            exmem_ir <= NOP;
+            exmem_alu <= (others => '0');
+            exmem_b <= (others => '0');
+            exmem_cond <= '0';
+            exmem_npc <= (others => '0');
+            -- MEM/WB
+            memwb_ir <= NOP;
+            memwb_alu <= (others => '0');
+            memwb_lmd <= (others => '0');
+        
+        -- On rising edge, update pipeline registers with new values from sub-components
+        elsif rising_edge(clock) then
+
+            -- ========== MEM/WB latch ==========
+            memwb_ir <= exmem_ir;
+            memwb_alu <= exmem_alu;
+            memwb_lmd <= mem_load_data;
+            -- JAL/JALR: link address (PC+4) stored in lmd
+            if f_opcode(exmem_ir) = OP_JAL or
+               f_opcode(exmem_ir) = OP_JALR then
+                memwb_lmd <= std_logic_vector(exmem_npc);
+            end if;
+
+            -- ========== EX/MEM latch ==========
+            if flush_sig = '1' then
+                exmem_ir <= NOP;
+                exmem_alu <= (others => '0');
+                exmem_b <= (others => '0');
+                exmem_cond <= '0';
+                exmem_npc <= (others => '0');
+            else
+                exmem_ir <= idex_ir;
+                exmem_alu <= ex_alu_result;
+                exmem_b <= idex_b;
+                exmem_cond <= ex_branch_cond;
+                exmem_npc <= idex_npc;
+            end if;
+
+            -- ========== ID/EX latch ==========
+            if flush_sig = '1' or stall_sig = '1' then
+                -- Insert NOP bubble
+                idex_ir <= NOP;
+                idex_pc <= (others => '0');
+                idex_npc <= (others => '0');
+                idex_a <= (others => '0');
+                idex_b <= (others => '0');
+                idex_imm <= (others => '0');
+            else
+                idex_ir <= ifid_ir;
+                idex_pc <= ifid_pc;
+                idex_npc <= ifid_npc;
+                idex_a <= id_rs1_data;
+                idex_b <= id_rs2_data;
+                idex_imm <= id_imm_data;
+            end if;
+
+            -- ========== IF/ID latch ==========
+            if flush_sig = '1' then
+                ifid_ir <= NOP;
+                ifid_pc <= (others => '0');
+                ifid_npc <= (others => '0');
+            elsif stall_sig = '0' then
+                -- Assemble 32-bit instruction from 4 imem bank outputs
+                ifid_ir(7  downto 0) <= imem_rdata(0);  -- byte 0
+                ifid_ir(15 downto 8) <= imem_rdata(1);  -- byte 1
+                ifid_ir(23 downto 16) <= imem_rdata(2);  -- byte 2
+                ifid_ir(31 downto 24) <= imem_rdata(3);  -- byte 3
+                ifid_pc <= fetch_pc;
+                ifid_npc <= fetch_pc + 4;
+            end if;
+            -- On stall without flush: IF/ID holds current values
+
+            -- ========== PC + fetch tracking ==========
+            fetch_pc <= pc;    -- remember which PC we just sent to imem
+            pc <= pc_nxt;
+
         end if;
     end process;
 
