@@ -32,12 +32,13 @@ architecture rtl of regfile is
     type reg_array_t is array(0 to 31) of std_logic_vector(31 downto 0);
     signal regs : reg_array_t := (others => (others => '0'));
 begin
-    -- Synchronous write on rising edge
+    -- Synchronous write on falling edge (write-first-half of cycle)
+    -- This ensures WB writes are visible to ID reads on the next rising edge.
     process(clock, reset)
     begin
         if reset = '1' then
             regs <= (others => (others => '0'));
-        elsif rising_edge(clock) then
+        elsif falling_edge(clock) then
             if wr_en = '1' and rd_addr /= 0 then
                 regs(rd_addr) <= rd_data;
             end if;

@@ -112,6 +112,14 @@ begin
             if use_rs1(ifid_ir) and r1 /= 0 and r1 = md then need := true; end if;
             if use_rs2(ifid_ir) and r2 /= 0 and r2 = md then need := true; end if;
         end if;
+        -- Store-then-load stall: when a store is about to enter EX/MEM
+        -- (currently in ID/EX) and a load is in IF/ID, stall one cycle.
+        -- This ensures that when the load reaches ID/EX, the store has
+        -- already left EX/MEM, so the dmem_driver can pre-register the
+        -- load address without conflicting with the store.
+        if opcode(idex_ir) = OP_STORE and opcode(ifid_ir) = OP_LOAD then
+            need := true;
+        end if;
         -- Set stall output based on whether a hazard was detected
         if need then
             stall <= '1';

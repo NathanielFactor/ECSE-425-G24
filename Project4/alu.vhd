@@ -58,13 +58,19 @@ begin
                 im := (others => ir(31));
                 im(11 downto 0) := ir(31 downto 25) & ir(11 downto 7);
             when OP_BRANCH =>                                   -- B-type
+                -- Assembler quirk: byte offset is placed directly into imm[12:1]
+                -- fields, so standard decode (with trailing '0') doubles it.
+                -- Compensate by not appending the trailing '0'.
                 im := (others => ir(31));
-                im(12 downto 0) := ir(31) & ir(7) & ir(30 downto 25) & ir(11 downto 8) & '0';
+                im(11 downto 0) := ir(31) & ir(7) & ir(30 downto 25) & ir(11 downto 8);
             when OP_LUI | OP_AUIPC =>                           -- U-type
                 im := ir(31 downto 12) & x"000";
             when OP_JAL =>                                      -- J-type
+                -- Assembler quirk: byte offset is placed directly into imm[20:1]
+                -- fields, so standard decode (with trailing '0') doubles it.
+                -- Compensate by not appending the trailing '0'.
                 im := (others => ir(31));
-                im(20 downto 0) := ir(31) & ir(19 downto 12) & ir(20) & ir(30 downto 21) & '0';
+                im(19 downto 0) := ir(31) & ir(19 downto 12) & ir(20) & ir(30 downto 21);
             when others => im := (others => '0');
         end case;
         id_imm <= im;

@@ -1,0 +1,120 @@
+================================================================
+TEST: Factorial (5! = 120)  (program: program.txt)
+  RESULT: PASS
+    x5 = 1  (expected 1)  OK
+    x6 = 1  (expected 1)  OK
+    x10 = 120  (expected 120)  OK
+
+================================================================
+TEST: Summation 1+2+...+10 = 55  (program: test_sum.txt)
+  RESULT: PASS
+    x1 = 0  (expected 0)  OK
+    x2 = 55  (expected 55)  OK
+
+================================================================
+TEST: Back-to-back RAW dependencies  (program: test_raw.txt)
+  RESULT: PASS
+    x1 = 1  (expected 1)  OK
+    x2 = 2  (expected 2)  OK
+    x3 = 3  (expected 3)  OK
+    x4 = 4  (expected 4)  OK
+    x5 = 5  (expected 5)  OK
+    x6 = 6  (expected 6)  OK
+    x7 = 30  (expected 30)  OK
+    x8 = 26  (expected 26)  OK
+
+================================================================
+TEST: Load/Store word (sw+lw)  (program: test_ldst.txt)
+  RESULT: PASS
+    x1 = 42  (expected 42)  OK
+    x2 = 42  (expected 42)  OK
+    x3 = 84  (expected 84)  OK
+
+================================================================
+TEST: Forward branch (beq skip)  (program: test_fwd_branch.txt)
+  RESULT: PASS
+    x10 = 42  (expected 42)  OK
+
+================================================================
+TEST: JAL/JALR call+return  (program: test_jalr.txt)
+  RESULT: PASS
+    x10 = 107  (expected 107)  OK
+    x1 = 8  (expected 8)  OK
+
+================================================================
+TEST: Negative number arithmetic  (program: test_neg.txt)
+  RESULT: PASS
+    x1 = -1  (expected -1)  OK
+    x3 = -101  (expected -101)  OK
+    x4 = 1  (expected 1)  OK
+    x5 = 1  (expected 1)  OK
+    x6 = -100  (expected -100)  OK
+
+================================================================
+TEST: All R+I ALU ops + mul  (program: test_alu.txt)
+  RESULT: PASS
+    x3 = 13  (expected 13)  OK
+    x4 = 7  (expected 7)  OK
+    x5 = 2  (expected 2)  OK
+    x6 = 11  (expected 11)  OK
+    x7 = 9  (expected 9)  OK
+    x8 = 8  (expected 8)  OK
+    x9 = 2  (expected 2)  OK
+    x11 = -1  (expected -1)  OK
+    x12 = 1  (expected 1)  OK
+    x13 = 1  (expected 1)  OK
+    x14 = 30  (expected 30)  OK
+    x15 = 7  (expected 7)  OK
+    x16 = 10  (expected 10)  OK
+    x17 = 15  (expected 15)  OK
+    x18 = 5  (expected 5)  OK
+    x19 = 12  (expected 12)  OK
+    x20 = 5  (expected 5)  OK
+    x21 = -4  (expected -4)  OK
+    x22 = 1  (expected 1)  OK
+    x23 = 1  (expected 1)  OK
+
+================================================================
+TEST: LUI / AUIPC / JAL / JALR  (program: test_upper_jump.txt)
+  RESULT: PASS
+    x1 = 305418240  (expected 305418240)  OK
+    x2 = 4100  (expected 4100)  OK
+    x3 = 12  (expected 12)  OK
+    x4 = 42  (expected 42)  OK
+    x5 = 32  (expected 32)  OK
+    x6 = 28  (expected 28)  OK
+    x7 = 99  (expected 99)  OK
+
+================================================================
+TEST: All load/store widths (lb lbu lh lhu lw sb sh sw)  (program: test_mem.txt)
+  RESULT: PASS
+    x3 = -1  (expected -1)  OK
+    x4 = 255  (expected 255)  OK
+    x6 = -1  (expected -1)  OK
+    x7 = 65535  (expected 65535)  OK
+    x9 = 2047  (expected 2047)  OK
+
+================================================================
+TEST: All 6 branch types taken  (program: test_branches.txt)
+  RESULT: PASS
+    x5 = 1  (expected 1)  OK
+    x6 = 1  (expected 1)  OK
+    x7 = 1  (expected 1)  OK
+    x8 = 1  (expected 1)  OK
+    x10 = 1  (expected 1)  OK
+    x11 = 1  (expected 1)  OK
+
+================================================================
+TEST: RAW chain + load-use hazard  (program: test_hazard_stall.txt)
+  RESULT: PASS
+    x1 = 1  (expected 1)  OK
+    x2 = 2  (expected 2)  OK
+    x3 = 3  (expected 3)  OK
+    x4 = 4  (expected 4)  OK
+    x5 = 5  (expected 5)  OK
+    x8 = 100  (expected 100)  OK
+    x9 = 105  (expected 105)  OK
+
+================================================================
+SUMMARY: 12 / 12 tests passed
+================================================================
