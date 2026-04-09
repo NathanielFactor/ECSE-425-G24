@@ -1,22 +1,30 @@
 -- ============================================================================
--- ECSE 425 Project 4: 5-Stage Pipelined RISC-V Processor
+-- ECSE 425 Project 4 -- Five-stage pipelined RISC-V processor
 -- ============================================================================
--- RV32I subset (23 instructions) + mul (RV32M).
--- Hazard detection with stalling (no forwarding).
--- Branches resolved in EX, flush on taken branch/JAL/JALR.
+-- Implements the RV32I subset listed in the assignment Appendix plus `mul`
+-- from the RV32M extension. Pipeline is the textbook IF/ID/EX/MEM/WB layout
+-- from H&P 7e Appendix C, Figs. C.19/C.20: branches resolve in EX and take
+-- effect in MEM, so a taken branch costs three bubbles. There is no
+-- forwarding -- we rely on hazard_control.vhd to stall in ID instead, which
+-- is the simpler half of the H&P discussion.
 --
--- MEMORY: Instantiates PD3 memory.vhd via a 4-bank scheme.
---   - 4 banks for instruction memory (loaded from program.txt)
---   - 4 banks for data memory (initialized to zeros)
--- Bank k stores byte k of every aligned word.
+-- MEMORY
+--   Both the instruction memory and the data memory are built from four
+--   instances of the PD3 memory.vhd model arranged as byte lanes. Bank k
+--   holds byte k of every aligned word, so a word access fans out to all
+--   four banks in parallel and a sub-word access only touches the lanes it
+--   needs. The data memory is 32 KiB, the instruction memory is 4 KiB
+--   (1024 instructions, the project cap).
 --
--- FETCH TIMING: memory.vhd has 1-cycle read latency (address is
--- registered on rising_edge, readdata is combinational from the
--- registered address). imem_addr is driven from pc_nxt (not pc),
--- which pre-registers the next address one cycle early.  This
--- ensures rdata is always aligned with the current pc at the
--- latch edge, so each instruction appears exactly once.
--- fetch_valid handles the 1-cycle startup bubble after reset/flush.
+-- FETCH TIMING
+--   memory.vhd has a 1-cycle read latency: the address is registered on
+--   rising_edge, and readdata is combinational from the *registered* value.
+--   To keep IF aligned with PC we drive imem_addr from pc_nxt rather than
+--   pc -- that way the address that *will* become pc on the next edge is
+--   the one currently sitting in the memory's address register, and rdata
+--   is already valid when the IF/ID latch fires. fetch_valid is the one-bit
+--   "wait one cycle while imem catches up" flag we set after reset and
+--   after every taken branch.
 -- ============================================================================
  
 library ieee;
@@ -334,6 +342,13 @@ begin
     -- ####################################################################
     --                 STAGE 1: Fetch (IF) + PC Update
     -- ####################################################################
+    -- pc_next_mux: pure combinational PC selector. Priority order matters:
+    --   1. flush  -> redirect to the branch/jump target sitting in EX/MEM
+    --   2. stall  -> hold PC at "the address we just fetched" so the next
+    --                fetch is a no-op (the IF/ID latch is also frozen)
+    --   3. !valid -> hold PC for one cycle after a flush/reset while imem
+    --                catches up (memory has 1-cycle read latency)
+    --   4. else   -> straight-line: pc + 4
     pc_next_mux: process(pc, stall_sig, flush_sig, exmem_alu, fetch_valid, ifid_npc)
     begin
         if flush_sig = '1' then
@@ -350,6 +365,22 @@ begin
     -- ####################################################################
     --          STAGE 4: DATA MEMORY DRIVER (load/store + dump)
     -- ####################################################################
+    -- dmem_driver owns every signal that goes *into* the data memory banks
+    -- (address / wdata / we / re). Keeping all writes to those signals in a
+    -- single process is what lets us avoid VHDL multi-driver errors -- if you
+    -- ever need to drive dmem_addr from somewhere else, route it through here
+    -- instead.
+    --
+    -- The process has two phases:
+    --   1. Run phase: while dump = '0', look at the instruction sitting in
+    --      EX/MEM. If it's a store, drive the write byte-lanes; if it's a
+    --      load, drive the read lanes. Loads are pre-issued one cycle early
+    --      (when the load is still in EX) so the data lands on the rdata bus
+    --      in time for the WB stage.
+    --   2. Dump phase: walk addresses 0..8191 one per clock, driving the
+    --      read lanes. The companion dump_proc reads dmem_rdata on the same
+    --      edges and writes memory.txt. The two stay in lock-step via the
+    --      `dumping` signal.
     dmem_driver: process
         variable op       : std_logic_vector(6 downto 0);
         variable word_idx : integer;
@@ -430,6 +461,16 @@ begin
     -- ####################################################################
     -- MEM STAGE: Assemble load data
     -- ####################################################################
+    -- The byte-bank memory hands us four independent 8-bit lanes. This
+    -- process glues them back into a 32-bit value, applying the right
+    -- sub-word selection and sign/zero extension based on funct3:
+    --   000 lb  -- byte,  sign-extend
+    --   001 lh  -- half,  sign-extend
+    --   010 lw  -- word,  no extension needed
+    --   100 lbu -- byte,  zero-extend
+    --   101 lhu -- half,  zero-extend
+    -- Only `lw` is required by the spec, but the others are nearly free here
+    -- and the bookkeeping is identical, so we wire them up too.
     mem_load_assemble: process(exmem_ir, exmem_alu, dmem_rdata)
         variable f3       : std_logic_vector(2 downto 0);
         variable byte_off : integer;
@@ -468,6 +509,14 @@ begin
     -- ####################################################################
     --                 STAGE 5: WRITE-BACK (WB)
     -- ####################################################################
+    -- Pure mux. Picks which value the WB stage actually shoves into the
+    -- register file:
+    --   * loads        -> the data we just pulled out of memory (memwb_lmd)
+    --   * jal/jalr     -> PC+4 of the jump itself, also stashed in memwb_lmd
+    --                     by the MEM/WB latch (this is the link register)
+    --   * everything else (ALU ops, lui, auipc) -> ALU result
+    -- writes_rd() handles the "x0 cannot be a destination" rule, so wr_en
+    -- stays low whenever rd == 0 even if the instruction would normally write.
     wb_select: process(memwb_ir, memwb_alu, memwb_lmd)
         variable op : std_logic_vector(6 downto 0);
     begin
@@ -489,6 +538,22 @@ begin
     -- ####################################################################
     --                 PIPELINE REGISTER UPDATES
     -- ####################################################################
+    -- This is the only process that drives any *_pc / *_ir / *_alu / *_b
+    -- pipeline latch. Each per-stage block (MEM/WB, EX/MEM, ID/EX, IF/ID)
+    -- bubble-or-advance based on stall_sig and flush_sig:
+    --
+    --   stall_sig (RAW hazard from hazard_control):
+    --     * IF/ID is held in place (we re-fetch the same instruction next cycle)
+    --     * ID/EX is replaced with a NOP bubble
+    --     * EX/MEM and MEM/WB advance normally
+    --
+    --   flush_sig (taken branch / JAL / JALR sitting in EX/MEM):
+    --     * IF/ID, ID/EX, EX/MEM are all squashed to NOP -- the two
+    --       instructions fetched on the wrong path and the branch itself
+    --       are killed (the branch's effect on the architectural PC is
+    --       captured by pc_next_mux on the same edge).
+    --     * fetch_valid drops to '0' so we know to insert one extra bubble
+    --       while imem catches up to the redirected PC.
     pipeline_regs: process(clock, reset)
     begin
         if reset = '1' then
@@ -581,7 +646,14 @@ begin
     --                 PROGRAM LOADING
     -- ####################################################################
     -- Drives load_addr/load_wdata/load_we (NOT imem_addr directly).
-    -- The imem_mux process selects between loader and fetch signals.
+    -- The imem_mux process selects between loader and fetch signals so that
+    -- only one process is ever the source of imem_addr at a time.
+    --
+    -- File format (must match what the bundled assembler emits):
+    --   one 32-bit word per line, MSB first, characters '0'/'1', addresses
+    --   ascending from 0. Lines shorter than 32 chars are skipped silently.
+    -- Once EOF is reached we drop prog_loading; the imem_mux flips over to
+    -- fetch mode and the pipeline starts running.
     load_program: process
         file     f    : text;
         variable lin  : line;
@@ -632,6 +704,14 @@ begin
     -- ####################################################################
     --                 OUTPUT DUMP
     -- ####################################################################
+    -- Two output files, in the format the grader expects:
+    --   register_file.txt -- 32 lines, x0 first, MSB-first binary
+    --   memory.txt        -- 8192 lines, one 32-bit word per data-mem slot
+    -- The register dump runs as soon as `dump` goes high (no clock cycles
+    -- needed -- the register file is combinational on dump_addr). The memory
+    -- dump rendezvous-es with dmem_driver via the `dumping` signal: once
+    -- dmem_driver starts walking addresses, this process samples the four
+    -- byte lanes on each rising edge and concatenates them little-endian.
     dump_proc: process
         file     rf_file : text;
         file     dm_file : text;

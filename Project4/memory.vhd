@@ -1,11 +1,24 @@
 -- ============================================================================
--- memory.vhd — PD3 Memory Model
+-- memory.vhd  --  byte-wide synchronous SRAM model (from PD3, lightly tweaked)
 -- ============================================================================
--- Changes from PD3 original:
---   1. Added 'init_zero' generic (default true). When true, memory
---      initializes to all zeros (required for data memory per project spec).
---      When false, uses PD3 default: to_unsigned(i, 8).
---   2. All other behavior is identical to the PD3 original.
+-- This is the same memory primitive we built for Project 3, copied in here
+-- so Project 4 can simulate without depending on a sibling directory. The
+-- only behavioural change from the PD3 original is the new `init_zero`
+-- generic:
+--
+--   init_zero = true  -- fill the array with all zeros at t < 1 ps
+--                       (required for the data memory per the spec)
+--   init_zero = false -- use the original PD3 placeholder pattern,
+--                       ram_block(i) = to_unsigned(i,8). Useful for
+--                       sanity-checking that addresses are routed right.
+--
+-- The processor instantiates four of these per memory (one per byte lane),
+-- so a "32 KiB data memory" is really 4 x 8192-byte banks, and a word
+-- access fans out to all four lanes in parallel.
+--
+-- Read latency is one cycle: the address is registered on rising_edge and
+-- readdata is a continuous assignment from that registered address. The
+-- top-level deals with this by driving address from pc_nxt instead of pc.
 -- ============================================================================
 
 --Adapted from Example 12-15 of Quartus Design and Synthesis handbook

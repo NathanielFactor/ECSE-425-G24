@@ -126,10 +126,24 @@ class _SB(Instruction):
 
 	@staticmethod
 	def immediate(imm, n):
-		mod_imm = format(((1 << 12) - 1) & int(imm), '012b') # Bokun: changed from 13 to 12
-		if n == 1:
-			return mod_imm[12-12] + mod_imm[12-10:12-4]
-		return mod_imm[12-4:12-0] + mod_imm[12-11]
+		# Standard RV B-type encoding. The immediate is a 13-bit *signed*
+		# byte offset; bit 0 is implicit (always 0) so only 12 bits travel
+		# in the instruction word, scattered across two fields:
+		#
+		#   instr[31:25] = imm[12] | imm[10:5]
+		#   instr[11:7]  = imm[4:1] | imm[11]
+		#
+		# Two's complement is handled by masking with (1<<13)-1 first, which
+		# turns negative Python ints into the right 13-bit pattern.
+		val = int(imm) & ((1 << 13) - 1)
+		bits = format(val, '013b')          # bits[i] holds imm[12-i]
+		imm12   = bits[0]
+		imm11   = bits[1]
+		imm10_5 = bits[2:8]
+		imm4_1  = bits[8:12]
+		if n == 1:                          # instr[31:25]
+			return imm12 + imm10_5
+		return imm4_1 + imm11               # instr[11:7]
 
 class _U(Instruction):
 	def __repr__(self):
@@ -172,8 +186,25 @@ class _UJ(Instruction):
 
 	@staticmethod
 	def immediate(imm):
-		mod_imm = format(((1 << 20) - 1) & int(imm), '020b') # Bokun fixed no. of bits (21 -> 20)
-		return mod_imm[20-20] + mod_imm[20-10:20-0] + mod_imm[20-11] + mod_imm[20-19:20-11]
+		# Standard RV J-type encoding. 21-bit signed byte offset, LSB implicit,
+		# so only 20 bits land in the instruction word -- and they are deeply
+		# scrambled. Mapping:
+		#
+		#   instr[31]    = imm[20]      (sign bit)
+		#   instr[30:21] = imm[10:1]
+		#   instr[20]    = imm[11]
+		#   instr[19:12] = imm[19:12]
+		#
+		# (Yes, the assembler manual really does shuffle them like that.
+		# It minimises wiring in the immediate generator block.)
+		val = int(imm) & ((1 << 21) - 1)
+		bits = format(val, '021b')          # bits[i] holds imm[20-i]
+		imm20    = bits[0]
+		imm19_12 = bits[1:9]
+		imm11    = bits[9]
+		imm10_1  = bits[10:20]
+		# Concatenated MSB-first to fill instr[31:12]:
+		return imm20 + imm10_1 + imm11 + imm19_12
 
 class InstructionParser:
 	def organize(self, *args):

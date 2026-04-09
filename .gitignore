@@ -1,0 +1,47 @@
+# ----------------------------------------------------------------------------
+# ModelSim / Questa simulation artefacts
+# ----------------------------------------------------------------------------
+# Every `vsim -do testbench.tcl` rebuilds the work library and the transcript,
+# so none of this should ever be committed.
+work/
+transcript
+vsim.wlf
+*.qdb
+*.qpg
+*.qtl
+*_vmake
+modelsim.ini
+
+# ----------------------------------------------------------------------------
+# Generated processor outputs
+# ----------------------------------------------------------------------------
+# Both files are produced by Project4/processor.vhd's dump_proc on every run.
+# The grader runs the testbench themselves and compares the freshly-generated
+# files against an expected reference, so committing stale copies only causes
+# confusion.
+Project4/memory.txt
+Project4/register_file.txt
+Project4/pipeline_log.txt
+
+# Anything matching test_*.txt in Project4/ is the assembled binary or the
+# captured output of an ad-hoc test program -- regenerate from the .s files
+# in Project4/riscv_assembler/ if you need them again.
+Project4/test_*.txt
+
+# ----------------------------------------------------------------------------
+# Python bits from the bundled assembler
+# ----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# ----------------------------------------------------------------------------
+# OS / editor cruft
+# ----------------------------------------------------------------------------
+.DS_Store
+__MACOSX/
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/

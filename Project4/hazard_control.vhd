@@ -1,10 +1,28 @@
 -- ============================================================================
--- hazard_control.vhd — Hazard Detection & Flush Logic
+-- hazard_control.vhd  --  RAW stall + control-flow flush detector
 -- ============================================================================
--- Purely combinational. Outputs:
---   stall: IF/ID reads register being written by ID/EX or EX/MEM instruction.
---   flush: taken branch/JAL/JALR in EX/MEM stage.
--- No forwarding. MEM/WB writes before ID reads, so no stall for MEM/WB.
+-- All-combinational helper that produces the two control bits the rest of
+-- the pipeline reacts to:
+--
+--   stall : the instruction in IF/ID needs a register that the instruction
+--           in ID/EX or EX/MEM is still computing. Holding stall high tells
+--           processor.vhd to (a) freeze IF/ID, (b) re-fetch the same PC,
+--           and (c) inject a NOP into ID/EX -- the classic bubble.
+--
+--   flush : a control-flow instruction sitting in EX/MEM has just resolved
+--           "taken" (or it's an unconditional jump). The two instructions
+--           speculatively fetched after it are on the wrong path and have
+--           to be killed. processor.vhd squashes IF/ID, ID/EX and EX/MEM
+--           when this is high, and pc_next_mux redirects PC to the target.
+--
+-- We do *not* implement forwarding, so a producer in ID/EX needs to drag
+-- its result all the way to MEM/WB before the consumer in IF/ID can read
+-- it -- that's normally two stall cycles. The trick that lets us cap it
+-- at exactly that without checking MEM/WB explicitly is in regfile.vhd:
+-- WB writes on the falling edge of the same cycle ID reads on the rising
+-- edge, so the moment a producer reaches WB its value is visible to ID.
+-- Hence we only need to stall while the producer is still in EX/MEM or
+-- earlier -- exactly the two checks in the process below.
 -- ============================================================================
 
 library ieee;
@@ -92,8 +110,15 @@ architecture comb of hazard_control is
     end;
 
 begin
-    -- Stall detection
-    process(ifid_ir, idex_ir, exmem_ir)
+    -- Stall detection.
+    -- For each pipeline register that holds a "still computing" producer
+    -- (ID/EX and EX/MEM), check whether its rd matches either of the
+    -- registers the IF/ID instruction wants to read. The use_rs1 / use_rs2
+    -- guards keep us from stalling on instructions that don't actually
+    -- consume a particular source (e.g. LUI uses neither rs1 nor rs2).
+    -- The `r1 /= 0` / `r2 /= 0` guards stop a fake hazard against x0,
+    -- which is wired to zero in the regfile and never needs to be waited on.
+    stall_detect: process(ifid_ir, idex_ir, exmem_ir)
         variable r1, r2, exd, md    :   integer;
         variable need               :   boolean;
     begin
@@ -128,7 +153,12 @@ begin
         end if;
     end process;
 
-    -- Flush detection
+    -- Flush detection.
+    -- Keyed on the EX/MEM stage rather than EX, because that's the
+    -- moment processor.vhd is *about to* push the wrong-path instruction
+    -- into the next latch -- catching it here squashes IF/ID, ID/EX and
+    -- EX/MEM in one shot, which is the three bubbles the assignment
+    -- specifies for a taken branch.
     flush <= '1' when
         -- Flush if EX/MEM instruction is a taken branch or a jump
         (opcode(exmem_ir) = OP_BRANCH and exmem_cond = '1') or opcode(exmem_ir) = OP_JAL or opcode(exmem_ir) = OP_JALR
