@@ -55,13 +55,27 @@ class _I(Instruction):
 	def compute_instr(self, instr, rs1, imm, rd):
 		instr = super().check_instr_valid(instr, I_instr)
 		opcode, f3 = 0, 1
+		row = instr_map[instr]
+
+		# Shift immediates (slli / srli / srai) aren't really 12-bit-imm
+		# instructions -- they pack a 5-bit shamt into imm[4:0] and a 7-bit
+		# funct7 into imm[11:5]. Without splitting them out here, srai
+		# would silently encode the same as srli (funct7=0) and arithmetic
+		# right shifts would behave logically. Use the funct7 column from
+		# instr_data.dat for these three.
+		if instr in ('slli', 'srli', 'srai'):
+			funct7    = row[2]
+			shamt     = format(int(imm) & 0x1F, '05b')
+			imm_field = funct7 + shamt
+		else:
+			imm_field = _I.immediate(imm)
 
 		return "".join([
-			_I.immediate(imm),
+			imm_field,
 			super().reg(rs1),
-			instr_map[instr][f3],
+			row[f3],
 			super().reg(rd),
-			instr_map[instr][opcode]
+			row[opcode]
 		])
 
 	@staticmethod

@@ -26,6 +26,12 @@
 #   - memory.txt          (8192 lines, one word per data-mem slot)
 # ============================================================================
 
+# All paths in this script are relative to the directory the script lives
+# in, not the directory the user happened to launch vsim from. Without this,
+# `vsim -do path/to/testbench.tcl` from a parent directory would fail to
+# find src/ and sim/.
+cd [file dirname [file normalize [info script]]]
+
 # Fresh work library every run -- avoids stale qdb files
 vlib work
 

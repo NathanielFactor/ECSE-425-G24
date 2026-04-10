@@ -272,7 +272,7 @@ begin
     -- ####################################################################
     -- During prog_loading: imem signals come from the loader process
     -- During runtime: imem_addr comes combinationally from pc
-    -- This is a combinational MUX — only one process drives imem_addr.
+    -- This is a combinational MUX -- only one process drives imem_addr.
     imem_mux: process(prog_loading, load_addr, load_wdata, load_we, pc_nxt)
         variable widx : integer;
     begin
