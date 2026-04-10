@@ -1,0 +1,29 @@
+# modelsim / questa artefacts
+work/
+transcript
+vsim.wlf
+*.qdb
+*.qpg
+*.qtl
+*_vmake
+modelsim.ini
+
+# generated processor outputs
+Project4/memory.txt
+Project4/register_file.txt
+Project4/pipeline_log.txt
+Project4/test_*.txt
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# editor / OS
+.DS_Store
+__MACOSX/
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
