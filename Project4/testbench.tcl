@@ -18,9 +18,10 @@
 #
 # Prerequisites in the working directory at run time:
 #   - program.txt   (one 32-bit binary word per line, MSB first)
-#   - all .vhd files in this folder
+#   - src/          (the five RTL files)
+#   - sim/          (the testbench)
 #
-# Outputs produced in the same directory:
+# Outputs land in the working directory (not in src/ or sim/):
 #   - register_file.txt   (32 lines, x0 .. x31)
 #   - memory.txt          (8192 lines, one word per data-mem slot)
 # ============================================================================
@@ -28,13 +29,16 @@
 # Fresh work library every run -- avoids stale qdb files
 vlib work
 
-# Compile order: leaves first, then processor, then testbench
-vcom -2008 memory.vhd
-vcom -2008 regfile.vhd
-vcom -2008 alu.vhd
-vcom -2008 hazard_control.vhd
-vcom -2008 processor.vhd
-vcom -2008 processor_tb.vhd
+# Compile order: leaves first, then processor, then testbench.
+# Sources live under src/ (synthesisable RTL) and sim/ (testbench only).
+# Everything is compiled into the default `work` library, so no extra
+# library switches are needed at elaboration time.
+vcom -2008 src/memory.vhd
+vcom -2008 src/regfile.vhd
+vcom -2008 src/alu.vhd
+vcom -2008 src/hazard_control.vhd
+vcom -2008 src/processor.vhd
+vcom -2008 sim/processor_tb.vhd
 
 # Elaborate at 1 ps resolution (clock is 1 ns)
 vsim -t 1ps work.processor_tb

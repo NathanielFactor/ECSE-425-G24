@@ -12,7 +12,7 @@
     # Load-use hazard - load then immediately use result
     addi x6, x0, 0       # x6 = 0  (base address)
     addi x7, x0, 100     # x7 = 100
-    sw   x6, x7, 0       # mem[0] = 100
+    sw   x7, 0(x6)       # mem[0] = 100  (store x7 at address 0+x6)
     lw   x8, 0(x6)       # x8 = mem[0] = 100  (load)
     addi x9, x8, 5       # x9 = x8 + 5 = 105  (RAW load-use: stall required)
 

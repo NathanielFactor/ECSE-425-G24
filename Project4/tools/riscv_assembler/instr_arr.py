@@ -408,8 +408,10 @@ reg_map, instr_map = register_map(), instruction_map()
 
 
 R_instr = [
-	"add","sub", "sll", 
-	"sltu", "xor", "srl", 
+	"add","sub", "sll",
+	# slt was missing from the upstream list even though its opcode row is in
+	# instr_data.dat -- restored here so `slt rd, rs1, rs2` can assemble.
+	"slt", "sltu", "xor", "srl",
 	"sra", "or", "and",
 	"addw", "subw", "sllw",
 	"slrw", "sraw", "mul",
@@ -418,16 +420,21 @@ R_instr = [
 	"remu"
 ]
 I_instr = [
-	"addi", "lb", "lw",
+	# `lh` was also missing alongside the slt / srli omissions even though
+	# its opcode row is in instr_data.dat. Restored so signed half loads
+	# can assemble.
+	"addi", "lb", "lh", "lw",
 	"ld", "lbu", "lhu",
-	"lwu", "fence", "fence.i", 
-	"slli", "slti", "sltiu", 
-	"xori", "slri", "srai",
+	"lwu", "fence", "fence.i",
+	# `srli` was listed as "slri" upstream -- a typo that also appears in
+	# instr_data.dat. Fixed in both places so the standard mnemonic works.
+	"slli", "slti", "sltiu",
+	"xori", "srli", "srai",
 	"ori", "andi", "addiw",
-	"slliw", "srliw", "sraiw", 
-	"jalr", "ecall", "ebreak", 
-	"CSRRW", "CSRRS","CSRRC", 
-	"CSRRWI", "CSRRSI", "CSRRCI" 
+	"slliw", "srliw", "sraiw",
+	"jalr", "ecall", "ebreak",
+	"CSRRW", "CSRRS","CSRRC",
+	"CSRRWI", "CSRRSI", "CSRRCI"
 ]
 S_instr = [
 	"sw", "sb", "sh", 
