@@ -1,97 +1,73 @@
 #!/usr/bin/env python3
-"""
-build_all.py -- assemble every .s file in this directory and report status.
-
-Usage:
-    python3 build_all.py            # assemble all, print pass/fail summary
-    python3 build_all.py NAME       # assemble just NAME (with or without .s)
-    python3 build_all.py --install NAME
-                                    # assemble NAME and copy the result over
-                                    # Project4/program.txt so the next vsim
-                                    # run picks it up
-
-The bundled assembler lives one directory up. We import it directly rather
-than going through the package machinery so this script doesn't care about
-how the user invokes it.
-"""
+# assemble the test programs in this directory
+#
+# usage:
+#   python3 build_all.py                  assemble everything, print summary
+#   python3 build_all.py NAME             just NAME (with or without .s)
+#   python3 build_all.py --install NAME   also drop result in Project4/program.txt
 
 import contextlib
 import os
-import shutil
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ASM_DIR = os.path.dirname(HERE)
-PROJECT4 = os.path.dirname(os.path.dirname(ASM_DIR))
+ASM = os.path.dirname(HERE)
+PROJ = os.path.dirname(os.path.dirname(ASM))
 
-sys.path.insert(0, ASM_DIR)
-from convert import AssemblyConverter as AC  # noqa: E402
-
-
-def assemble(src_path):
-    """Run the assembler on `src_path` and return the list of binary words."""
-    converter = AC(output_mode="a")
-    # The assembler is chatty -- it logs every parse step to stdout. Swallow
-    # that here so the build summary stays readable.
-    with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
-        return converter(src_path)
+sys.path.insert(0, ASM)
+from convert import AssemblyConverter as AC
 
 
-def write_program_txt(words, dest_path):
-    """Write the assembled words out in the format the processor loader expects."""
-    with open(dest_path, "w") as out:
+def assemble(path):
+    # the assembler prints a line per parsed instruction; mute it
+    with open(os.devnull, "w") as null, contextlib.redirect_stdout(null):
+        return AC(output_mode="a")(path)
+
+
+def install(words):
+    with open(os.path.join(PROJ, "program.txt"), "w") as f:
         for w in words:
-            out.write(w + "\n")
+            f.write(w + "\n")
 
 
 def main(argv):
     args = argv[1:]
-    install = False
+    do_install = False
     if args and args[0] == "--install":
-        install = True
+        do_install = True
         args = args[1:]
 
-    # No name given -> assemble everything in this directory and tally results.
     if not args:
-        sources = sorted(f for f in os.listdir(HERE) if f.endswith(".s"))
-        ok = []
-        fail = []
-        for name in sources:
+        ok = fail = 0
+        for name in sorted(f for f in os.listdir(HERE) if f.endswith(".s")):
             try:
                 words = assemble(os.path.join(HERE, name))
-                ok.append((name, len(words)))
-            except Exception as exc:
-                fail.append((name, str(exc).splitlines()[0]))
+                print(f"  ok    {name:30} {len(words):3} words")
+                ok += 1
+            except Exception as e:
+                print(f"  fail  {name:30} {str(e).splitlines()[0]}")
+                fail += 1
+        print(f"\n{ok} ok, {fail} fail")
+        return 0 if fail == 0 else 1
 
-        for name, n in ok:
-            print(f"  OK    {name:30} {n:3} words")
-        for name, msg in fail:
-            print(f"  FAIL  {name:30} {msg}")
-        print(f"\n{len(ok)} passed, {len(fail)} failed")
-        return 0 if not fail else 1
-
-    # Single-file mode: accept the .s suffix or not, doesn't matter.
     name = args[0]
     if not name.endswith(".s"):
-        name = name + ".s"
-    src = os.path.join(HERE, name)
-    if not os.path.exists(src):
+        name += ".s"
+    path = os.path.join(HERE, name)
+    if not os.path.exists(path):
         print(f"no such test: {name}", file=sys.stderr)
         return 2
 
     try:
-        words = assemble(src)
-    except Exception as exc:
-        print(f"FAIL {name}: {exc}", file=sys.stderr)
+        words = assemble(path)
+    except Exception as e:
+        print(f"fail {name}: {e}", file=sys.stderr)
         return 1
 
-    print(f"OK   {name}  ({len(words)} words)")
-
-    if install:
-        target = os.path.join(PROJECT4, "program.txt")
-        write_program_txt(words, target)
-        print(f"installed -> {target}")
-
+    print(f"ok {name} ({len(words)} words)")
+    if do_install:
+        install(words)
+        print(f"installed -> {os.path.join(PROJ, 'program.txt')}")
     return 0
 
 

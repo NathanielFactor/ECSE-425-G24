@@ -1,27 +1,7 @@
--- ============================================================================
--- alu.vhd  --  immediate generator + ALU + branch comparator
--- ============================================================================
--- This file holds the three pieces of combinational logic that sit "around"
--- the ALU register inputs in the H&P 7e datapath:
---
---   1. imm_gen   -- decodes the immediate field of whatever instruction is
---                   currently in the ID stage. Lives in the ID half of the
---                   datapath; its output is latched into ID/EX.imm.
---
---   2. alu_exec  -- the actual ALU + branch comparator. Reads the EX-stage
---                   operands (idex_a, idex_b, idex_imm) and produces the
---                   ALU result and a "branch taken" flag. Branches resolve
---                   here, in EX, exactly as in Fig. C.19.
---
--- Both processes are pure combinational (no clocks, no state). All pipeline
--- latching happens in processor.vhd.
---
--- Supported instructions: the 23 from the project Appendix plus `mul` (RV32M).
--- A handful of "free extras" are wired up too -- sltu, slli/srli/srai, lb/lh,
--- lbu/lhu, sb/sh, bltu/bgeu -- because their decoding falls out of the same
--- case statements. None of those are required for grading, but they don't
--- cost anything either, so they're left in.
--- ============================================================================
+-- ALU + immediate generator + branch comparator. All combinational.
+-- Covers the 23 required instructions and mul, plus a handful of extras
+-- that fell out of the same case statements (sltu, slli/srli/srai,
+-- lb/lh/lbu/lhu, sb/sh, bltu/bgeu).
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
@@ -54,15 +34,8 @@ architecture comb of alu is
     constant OP_REG    : std_logic_vector(6 downto 0) := "0110011";
 begin
 
-    -- ================================================================
-    -- IMMEDIATE GENERATION (combinational, ID stage)
-    -- ================================================================
-    -- One case per instruction format. The trick to remember when reading
-    -- the bit slicing below: we always start with `im := (others => ir(31))`
-    -- so the upper bits get sign-extended for free, then we overwrite the
-    -- low bits with whatever the format actually carries. For U-type the
-    -- override goes the other way (lower 12 bits are zero-filled), since
-    -- LUI / AUIPC are an upper-immediate format.
+    -- immediate decode (one case per format).
+    -- start with im := (all = ir[31]) for sign-extend, then overwrite low bits.
     imm_gen: process(id_ir)
         variable ir : std_logic_vector(31 downto 0);
         variable op : std_logic_vector(6 downto 0);
@@ -79,15 +52,7 @@ begin
                 im := (others => ir(31));
                 im(11 downto 0) := ir(31 downto 25) & ir(11 downto 7);
             when OP_BRANCH =>                                   -- B-type
-                -- Branches encode a 13-bit signed byte offset, but the LSB is
-                -- implicit (always 0) so only 12 bits of encoding space are used.
-                -- Layout (RV-card / H&P 7e App. C):
-                --   imm[12] = ir[31]   (sign bit)
-                --   imm[11] = ir[7]
-                --   imm[10:5] = ir[30:25]
-                --   imm[4:1]  = ir[11:8]
-                --   imm[0]    = 0      (assumed -- branch targets are halfword aligned)
-                -- We then sign-extend bit 12 up through bit 31.
+                -- imm[12|10:5|4:1|11], bit 0 implicit
                 im := (others => ir(31));
                 im(12)          := ir(31);
                 im(11)          := ir(7);
@@ -95,18 +60,9 @@ begin
                 im(4 downto 1)  := ir(11 downto 8);
                 im(0)           := '0';
             when OP_LUI | OP_AUIPC =>                           -- U-type
-                -- The 20-bit immediate sits in the upper 20 bits of the word
-                -- and is left-shifted by 12 (lower 12 bits zero-filled).
                 im := ir(31 downto 12) & x"000";
             when OP_JAL =>                                      -- J-type
-                -- 21-bit signed byte offset, again with the LSB implicit.
-                -- Layout:
-                --   imm[20]    = ir[31]   (sign bit)
-                --   imm[19:12] = ir[19:12]
-                --   imm[11]    = ir[20]
-                --   imm[10:1]  = ir[30:21]
-                --   imm[0]     = 0
-                -- Sign-extend bit 20 up through bit 31.
+                -- imm[20|10:1|11|19:12], bit 0 implicit
                 im := (others => ir(31));
                 im(20)           := ir(31);
                 im(19 downto 12) := ir(19 downto 12);
@@ -118,22 +74,9 @@ begin
         id_imm <= im;
     end process;
 
-    -- ================================================================
-    -- ALU + BRANCH (combinational, EX stage)
-    -- ================================================================
-    -- Case-on-opcode, then case-on-funct3 (and funct7 bit 5 for the
-    -- ADD/SUB and SRL/SRA splits). The output `r` is the ALU result that
-    -- gets latched into EX/MEM.alu; for branches we *also* compute the
-    -- target address into the same `r` so the MEM stage can drop it onto
-    -- the PC if the branch is taken. The `c` flag carries the taken bit.
-    --
-    -- Important shortcuts the assignment lets us take:
-    --   * mul finishes in a single cycle (no multi-cycle EX), so it just
-    --     sits in the OP_REG case alongside add / sub / etc.
-    --   * jalr's "& ~1" rule (clear the bottom bit of the target) is one
-    --     line at the end of the JALR case.
-    --   * lui doesn't even need an addition -- the immediate is already
-    --     pre-shifted up in imm_gen, so the result is literally `ex_imm`.
+    -- ALU + branch comparator. Case on opcode, then funct3
+    -- (and funct7 bit 5 to split add/sub and srl/sra).
+    -- For branches r is also the target address (pc + imm).
     alu_exec: process(ex_ir, ex_a, ex_b, ex_imm, ex_pc)
         variable ir     : std_logic_vector(31 downto 0);
         variable op     : std_logic_vector(6 downto 0);
@@ -157,12 +100,10 @@ begin
 
         case op is
             when OP_REG =>
-                -- Check if it's the 'M' extension (Multiplication)
-                if f7 = "0000001" then                              -- MUL
+                if f7 = "0000001" then                              -- MUL (RV32M)
                     m64 := a_s * b_s;
                     r := std_logic_vector(m64(31 downto 0));
                 else
-                    -- Standard integer math based on the 'funct3' field
                     case f3 is
                         when "000" =>                                   -- ADD/SUB
                             if f7(5) = '1' then
@@ -199,8 +140,8 @@ begin
             end if;
 
             when OP_IMM =>
+                -- same as OP_REG but operand 2 = imm
                 case f3 is
-                    -- Same logic as OP_REG, but using 'ex_imm' instead of the second register
                     when "000" =>
                         r := std_logic_vector(a_s + imm_s);           -- ADDI
                     when "001" =>                                           -- SLLI
@@ -229,15 +170,12 @@ begin
                     when others => null;
             end case;
             
-            -- Address = Base Register + Offset (Immediate)
-            -- ie) lw x1, 4(x2) -> result is the address (x2 + 4)
+            -- effective address = rs1 + imm
             when OP_LOAD|OP_STORE =>
                 r := std_logic_vector(a_s + imm_s);
 
             when OP_BRANCH =>
-                -- 1. Calculate the target address: Current PC + Offset
-                r := std_logic_vector(ex_pc + unsigned(ex_imm));            -- branch target
-                -- 2. Evaluate the comparison between cases and flag c for whether the branch should be taken
+                r := std_logic_vector(ex_pc + unsigned(ex_imm));    -- target
                 case f3 is
                     when "000" =>
                         if ex_a = ex_b then
@@ -266,14 +204,14 @@ begin
                     when others => null; -- should never happen
                 end case;
 
-            when OP_JAL =>      --Jump and link
+            when OP_JAL =>
                 r := std_logic_vector(ex_pc + unsigned(ex_imm));
-            when OP_JALR =>     --Jump and link register
+            when OP_JALR =>
                 r := std_logic_vector(unsigned(ex_a) + unsigned(ex_imm));
-                r(0):='0';
-            when OP_LUI =>      -- Load upper immediate
+                r(0) := '0';                                        -- mask LSB
+            when OP_LUI =>
                 r := ex_imm;
-            when OP_AUIPC =>    -- Add upper immediate to pc
+            when OP_AUIPC =>
                 r := std_logic_vector(ex_pc + unsigned(ex_imm));
             when others =>
                 null;

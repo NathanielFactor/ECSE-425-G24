@@ -1,34 +1,29 @@
-# Bundled RISC-V assembler
+# RISC-V assembler
 
-A small Python assembler for the RV32I subset our processor implements,
-plus the `mul` instruction from RV32M. The output format is exactly what
-`processor.vhd`'s loader process expects: one 32-bit word per line, MSB
-first, addresses ascending from 0.
+Small Python assembler for the RV32I subset the processor implements,
+plus `mul` from RV32M. Output format is what the processor's loader
+wants: one 32-bit word per line, MSB first, addresses ascending.
 
 ## Layout
 
 ```
 riscv_assembler/
-├── README.md              you are here
-├── __init__.py            convenience entry point used by the existing
-│                          examples; not needed if you import convert
-│                          directly
-├── convert.py             AssemblyConverter -- the public surface
-├── parse.py               line tokeniser, label resolver
-├── instr_arr.py           instruction tables + per-format encoders
+├── __init__.py        usage example
+├── convert.py         AssemblyConverter (entry point)
+├── parse.py           tokeniser, label resolver
+├── instr_arr.py       instruction tables and encoders
 ├── data/
-│   ├── instr_data.dat     opcode / funct3 / funct7 lookup table
-│   └── reg_map.dat        ABI name -> xN aliases
-├── factorial.s            the assignment's example program
-└── tests/                 the regression test suite (see below)
+│   ├── instr_data.dat opcode/funct3/funct7 table
+│   └── reg_map.dat    ABI name -> xN
+├── factorial.s        the assignment's example program
+└── tests/
     ├── build_all.py
-    └── test_*.s           19 small programs, each with a header comment
-                           documenting expected register state on exit
+    └── test_*.s       19 small test programs
 ```
 
 ## Quick start
 
-Assemble a single file from the project root:
+From the project root:
 
 ```sh
 cd Project4/tools/riscv_assembler
@@ -37,47 +32,38 @@ python3 -c "import sys; sys.path.insert(0,'.'); \
     AC(output_mode='f')('factorial.s', '../../program.txt')"
 ```
 
-Or use the test runner under `tests/`, which knows where to drop the
-binary so a follow-up `vsim -do testbench.tcl` picks it up automatically:
+Or use the test runner under `tests/`:
 
 ```sh
 cd Project4/tools/riscv_assembler/tests
-python3 build_all.py                          # assemble every test, summary
-python3 build_all.py test_branches            # just one
-python3 build_all.py --install test_branches  # plus copy result over
-                                              # ../../../program.txt
+python3 build_all.py                          # assemble all
+python3 build_all.py test_branches            # one
+python3 build_all.py --install test_branches  # one + drop in ../../../program.txt
 ```
 
-## Supported syntax
+## Syntax
 
-- Comments start with `#` and run to end-of-line. Lines that *start*
-  with `#` are not allowed -- the comment must follow some code on
-  that line, or the line must be entirely blank.
-- Blank lines are fine. Whitespace inside a line is collapsed.
-- Labels are an identifier ending with `:`, on a line by themselves.
-- Numbered registers (`x0` .. `x31`) and ABI names (`zero`, `ra`, `sp`,
-  `gp`, `tp`, `t0`..`t6`, `s0`..`s11`, `a0`..`a7`, `fp`) are both
-  accepted -- see `data/reg_map.dat` for the full table.
-- Branches and jumps take label operands; the assembler computes the
-  byte offset for you.
-- Loads and stores use the standard `lw rd, imm(rs1)` /
-  `sw rs2, imm(rs1)` form. The "comma-separated triple" form some of
-  the older test programs used does not parse.
-- Pseudo-ops handled: `nop`, `mv`, `not`, `neg`, `j`, `li` (note: `li`
-  is currently a thin wrapper around `lui` and does not emit the
-  `addi` half, so it only works for values whose lower 12 bits are 0).
+- `#` starts an end-of-line comment. Lines that *start* with `#` aren't
+  allowed - the comment must follow some code, or the line must be blank.
+- Blank lines and arbitrary whitespace are fine.
+- Labels: `name:` on a line by itself.
+- Registers: `x0`..`x31` and ABI names (`zero`, `ra`, `sp`, `t0`..`t6`,
+  `s0`..`s11`, `a0`..`a7`, `fp`).
+- Branches and jumps take label operands.
+- Loads and stores are `lw rd, imm(rs1)` and `sw rs2, imm(rs1)`.
+- Pseudos: `nop`, `mv`, `not`, `neg`, `j`, `li`. Note `li` only emits a
+  `lui` and won't handle the lower 12 bits.
 
-## Notes for the curious
+## Notes
 
-Two upstream bugs were fixed in this fork:
+A couple of things were broken upstream and got fixed in this fork:
 
-- `slt`, `lh`, and `srli` were missing from the instruction tables in
-  `instr_arr.py` even though their opcodes were present in
-  `data/instr_data.dat`. They are now restored. (`srli` was also
-  spelled `slri` in the data file -- that has been corrected too.)
-- The B-type and J-type immediate encoders used to pack the byte
-  offset directly into `imm[11:0]` / `imm[19:0]`, which is one bit
-  off from the standard RISC-V layout (where the LSB is implicit and
-  the field actually carries `imm[12:1]` / `imm[20:1]`). They now
-  emit the standard scrambled encoding from the Reference Data card,
-  matching the immediate generator in `Project4/src/alu.vhd`.
+- `slt`, `lh`, `srli` were missing from the I/R instruction tables in
+  `instr_arr.py` even though their opcode rows were in `instr_data.dat`.
+  `srli` was also spelled `slri` in the data file. Both fixed.
+- The B-type and J-type immediate encoders packed the byte offset
+  directly into the instruction field instead of using the standard
+  scrambled encoding from the RV reference card. They now match the
+  ALU's immediate generator.
+- The I-type encoder ignored funct7, so `srai` silently encoded as
+  `srli`. Fixed for `slli`/`srli`/`srai`.

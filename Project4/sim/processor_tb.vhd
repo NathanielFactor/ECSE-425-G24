@@ -1,24 +1,5 @@
--- ============================================================================
--- processor_tb.vhd  --  top-level simulation harness
--- ============================================================================
--- Spec-mandated behaviour, in order:
---
---   1. Drive a 1 GHz clock (1 ns period) for the entire simulation.
---   2. Hold `reset` high for 2000 cycles. The processor's load_program
---      process consumes one rising edge per word; 2000 cycles is plenty
---      of headroom for the 1024-instruction maximum the spec allows.
---   3. Drop reset and let the processor run for exactly 10000 cycles --
---      the assignment guarantees no test program will need more.
---   4. Pulse `dump` for one cycle. processor.vhd's dump_proc reacts by
---      writing register_file.txt and memory.txt, then asserting `done`.
---   5. Wait for `done`, then stop the simulation with a severity-failure
---      assert. (testbench.tcl runs `run -all`, which returns when this
---      assert fires.)
---
--- The assertion-as-stop pattern is a ModelSim/Questa idiom; std.env.finish
--- would be cleaner under VHDL-2008 but isn't supported uniformly across
--- the lab machines.
--- ============================================================================
+-- 1 GHz clock, 2000-cycle reset (lets the loader finish), then 10000
+-- cycles of execution, then a dump pulse, then stop on assert false.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -39,12 +20,11 @@ architecture tb of processor_tb is
         );
     end component;
 
-    -- init signals and constants
     signal clk   : std_logic := '0';
     signal reset : std_logic := '0';
     signal dump  : std_logic := '0';
     signal done  : std_logic;
-    constant CLK_PERIOD : time := 1 ns;
+    constant CLK_PERIOD : time := 1 ns;     -- 1 GHz
 begin
     dut: processor
         generic map(
@@ -68,16 +48,16 @@ begin
     test_seq: process
     begin
         reset <= '1';
-        wait for 2000 * CLK_PERIOD;   -- covers program loading
+        wait for 2000 * CLK_PERIOD;   -- loader runs during reset
         reset <= '0';
-        wait for 10000 * CLK_PERIOD;  -- run processor
+        wait for 10000 * CLK_PERIOD;  -- run
         dump <= '1';
         wait for CLK_PERIOD;
         dump <= '0';
         wait until done = '1';
         wait for 2 * CLK_PERIOD;
-        report "===== SIMULATION COMPLETE =====" severity note;
-        assert false report "Stopping simulation." severity failure;
+        report "done" severity note;
+        assert false report "stop" severity failure;
         wait;
     end process;
 end tb;

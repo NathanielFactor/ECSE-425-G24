@@ -57,16 +57,10 @@ class _I(Instruction):
 		opcode, f3 = 0, 1
 		row = instr_map[instr]
 
-		# Shift immediates (slli / srli / srai) aren't really 12-bit-imm
-		# instructions -- they pack a 5-bit shamt into imm[4:0] and a 7-bit
-		# funct7 into imm[11:5]. Without splitting them out here, srai
-		# would silently encode the same as srli (funct7=0) and arithmetic
-		# right shifts would behave logically. Use the funct7 column from
-		# instr_data.dat for these three.
+		# slli/srli/srai need funct7 in the upper bits, not a plain 12-bit imm
 		if instr in ('slli', 'srli', 'srai'):
-			funct7    = row[2]
-			shamt     = format(int(imm) & 0x1F, '05b')
-			imm_field = funct7 + shamt
+			shamt = format(int(imm) & 0x1F, '05b')
+			imm_field = row[2] + shamt
 		else:
 			imm_field = _I.immediate(imm)
 
@@ -140,24 +134,12 @@ class _SB(Instruction):
 
 	@staticmethod
 	def immediate(imm, n):
-		# Standard RV B-type encoding. The immediate is a 13-bit *signed*
-		# byte offset; bit 0 is implicit (always 0) so only 12 bits travel
-		# in the instruction word, scattered across two fields:
-		#
-		#   instr[31:25] = imm[12] | imm[10:5]
-		#   instr[11:7]  = imm[4:1] | imm[11]
-		#
-		# Two's complement is handled by masking with (1<<13)-1 first, which
-		# turns negative Python ints into the right 13-bit pattern.
-		val = int(imm) & ((1 << 13) - 1)
-		bits = format(val, '013b')          # bits[i] holds imm[12-i]
-		imm12   = bits[0]
-		imm11   = bits[1]
-		imm10_5 = bits[2:8]
-		imm4_1  = bits[8:12]
-		if n == 1:                          # instr[31:25]
-			return imm12 + imm10_5
-		return imm4_1 + imm11               # instr[11:7]
+		# B-type: 13-bit signed offset, bit 0 implicit, split across two fields.
+		# instr[31:25] = imm[12]|imm[10:5], instr[11:7] = imm[4:1]|imm[11].
+		bits = format(int(imm) & ((1 << 13) - 1), '013b')
+		if n == 1:
+			return bits[0] + bits[2:8]
+		return bits[8:12] + bits[1]
 
 class _U(Instruction):
 	def __repr__(self):
@@ -200,25 +182,10 @@ class _UJ(Instruction):
 
 	@staticmethod
 	def immediate(imm):
-		# Standard RV J-type encoding. 21-bit signed byte offset, LSB implicit,
-		# so only 20 bits land in the instruction word -- and they are deeply
-		# scrambled. Mapping:
-		#
-		#   instr[31]    = imm[20]      (sign bit)
-		#   instr[30:21] = imm[10:1]
-		#   instr[20]    = imm[11]
-		#   instr[19:12] = imm[19:12]
-		#
-		# (Yes, the assembler manual really does shuffle them like that.
-		# It minimises wiring in the immediate generator block.)
-		val = int(imm) & ((1 << 21) - 1)
-		bits = format(val, '021b')          # bits[i] holds imm[20-i]
-		imm20    = bits[0]
-		imm19_12 = bits[1:9]
-		imm11    = bits[9]
-		imm10_1  = bits[10:20]
-		# Concatenated MSB-first to fill instr[31:12]:
-		return imm20 + imm10_1 + imm11 + imm19_12
+		# J-type: 21-bit signed offset, bit 0 implicit. Shuffled into instr[31:12]
+		# as imm[20] | imm[10:1] | imm[11] | imm[19:12].
+		bits = format(int(imm) & ((1 << 21) - 1), '021b')
+		return bits[0] + bits[10:20] + bits[9] + bits[1:9]
 
 class InstructionParser:
 	def organize(self, *args):
@@ -423,8 +390,6 @@ reg_map, instr_map = register_map(), instruction_map()
 
 R_instr = [
 	"add","sub", "sll",
-	# slt was missing from the upstream list even though its opcode row is in
-	# instr_data.dat -- restored here so `slt rd, rs1, rs2` can assemble.
 	"slt", "sltu", "xor", "srl",
 	"sra", "or", "and",
 	"addw", "subw", "sllw",
@@ -434,14 +399,9 @@ R_instr = [
 	"remu"
 ]
 I_instr = [
-	# `lh` was also missing alongside the slt / srli omissions even though
-	# its opcode row is in instr_data.dat. Restored so signed half loads
-	# can assemble.
 	"addi", "lb", "lh", "lw",
 	"ld", "lbu", "lhu",
 	"lwu", "fence", "fence.i",
-	# `srli` was listed as "slri" upstream -- a typo that also appears in
-	# instr_data.dat. Fixed in both places so the standard mnemonic works.
 	"slli", "slti", "sltiu",
 	"xori", "srli", "srai",
 	"ori", "andi", "addiw",

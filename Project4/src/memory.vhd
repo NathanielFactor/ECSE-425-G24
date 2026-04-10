@@ -1,25 +1,5 @@
--- ============================================================================
--- memory.vhd  --  byte-wide synchronous SRAM model (from PD3, lightly tweaked)
--- ============================================================================
--- This is the same memory primitive we built for Project 3, copied in here
--- so Project 4 can simulate without depending on a sibling directory. The
--- only behavioural change from the PD3 original is the new `init_zero`
--- generic:
---
---   init_zero = true  -- fill the array with all zeros at t < 1 ps
---                       (required for the data memory per the spec)
---   init_zero = false -- use the original PD3 placeholder pattern,
---                       ram_block(i) = to_unsigned(i,8). Useful for
---                       sanity-checking that addresses are routed right.
---
--- The processor instantiates four of these per memory (one per byte lane),
--- so a "32 KiB data memory" is really 4 x 8192-byte banks, and a word
--- access fans out to all four lanes in parallel.
---
--- Read latency is one cycle: the address is registered on rising_edge and
--- readdata is a continuous assignment from that registered address. The
--- top-level deals with this by driving address from pc_nxt instead of pc.
--- ============================================================================
+-- PD3 byte SRAM. Added init_zero generic so dmem starts at zeros.
+-- 1-cycle read latency (address registered on rising edge).
 
 --Adapted from Example 12-15 of Quartus Design and Synthesis handbook
 LIBRARY ieee;
@@ -52,19 +32,16 @@ ARCHITECTURE rtl OF memory IS
     SIGNAL read_waitreq_reg: STD_LOGIC := '1';
 
 BEGIN
-    --This is the main section of the SRAM model
     mem_process: PROCESS (clock)
     BEGIN
-        --This is a cheap trick to initialize the SRAM in simulation
+        -- init at t=0
         IF(now < 1 ps)THEN
-            --Initialization behavior depends on init_zero generic: true = all zeros, false = PD3 default (to_unsigned(i,8))
             IF init_zero THEN
                 For i in 0 to ram_size-1 LOOP
                     ram_block(i) <= (others => '0');
                 END LOOP;
             ELSE
                 For i in 0 to ram_size-1 LOOP
-                    -- Fix modelsim mistake
                     ram_block(i) <= std_logic_vector(to_unsigned(i,8));
                 END LOOP;
             END IF;
@@ -80,8 +57,7 @@ BEGIN
     END PROCESS;
     readdata <= ram_block(read_address_reg);
 
-    --The waitrequest signal is used to vary response time in simulation
-	--Read and write should never happen at the same time.
+    -- waitrequest pulses (PD3 model behaviour)
     waitreq_w_proc: PROCESS (memwrite)
     BEGIN
         IF (memwrite'event AND memwrite = '1') THEN
@@ -89,7 +65,6 @@ BEGIN
         END IF;
     END PROCESS;
 
-    -- Read waitrequest generation (same as PD3)
     waitreq_r_proc: PROCESS (memread)
     BEGIN
         IF (memread'event AND memread = '1') THEN
