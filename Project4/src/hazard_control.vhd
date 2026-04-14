@@ -10,16 +10,16 @@ use ieee.numeric_std.all;
 
 entity hazard_control is
     port(
-        ifid_ir    : in  std_logic_vector(31 downto 0);
-        idex_ir    : in  std_logic_vector(31 downto 0);
-        exmem_ir   : in  std_logic_vector(31 downto 0);
-        exmem_cond : in  std_logic;
-        stall      : out std_logic;
-        flush      : out std_logic
+        fetch_ir        : in  std_logic_vector(31 downto 0);
+        decode_ir       : in  std_logic_vector(31 downto 0);
+        execute_ir      : in  std_logic_vector(31 downto 0);
+        branch_taken    : in  std_logic;
+        stall           : out std_logic;
+        flush           : out std_logic
     );
 end hazard_control;
 
-architecture comb of hazard_control is
+architecture hazards of hazard_control is
     constant OP_LUI    : std_logic_vector(6 downto 0) := "0110111";
     constant OP_AUIPC  : std_logic_vector(6 downto 0) := "0010111";
     constant OP_JAL    : std_logic_vector(6 downto 0) := "1101111";
@@ -31,76 +31,83 @@ architecture comb of hazard_control is
     constant OP_REG    : std_logic_vector(6 downto 0) := "0110011";
 
     -- field accessors
-    function opcode(ir : std_logic_vector(31 downto 0)) return std_logic_vector is
+    function get_opcode(ir : std_logic_vector(31 downto 0)) return std_logic_vector is
         begin return ir(6 downto 0); end;
-    function rd_i(ir : std_logic_vector(31 downto 0)) return integer is
+    function get_rd(ir : std_logic_vector(31 downto 0)) return integer is
         begin return to_integer(unsigned(ir(11 downto 7))); end;
-    function rs1_i(ir : std_logic_vector(31 downto 0)) return integer is
+    function get_rs1(ir : std_logic_vector(31 downto 0)) return integer is
         begin return to_integer(unsigned(ir(19 downto 15))); end;
-    function rs2_i(ir : std_logic_vector(31 downto 0)) return integer is
+    function get_rs2(ir : std_logic_vector(31 downto 0)) return integer is
         begin return to_integer(unsigned(ir(24 downto 20))); end;
 
     -- does this instruction write rd?
-    function wr_rd(ir : std_logic_vector(31 downto 0)) return boolean is
+    function writes_reg(ir : std_logic_vector(31 downto 0)) return boolean is
         variable op : std_logic_vector(6 downto 0);
     begin
-        op := opcode(ir);
-        if rd_i(ir) = 0 then
+        op := get_opcode(ir);
+        if get_rd(ir) = 0 then
             return false;
         end if;
-        return op = OP_LUI or op = OP_AUIPC or op = OP_JAL or op = OP_JALR
-            or op = OP_LOAD or op = OP_IMM or op = OP_REG;
+        return op = OP_LUI or op = OP_AUIPC or op = OP_JAL or op = OP_JALR or op = OP_LOAD or op = OP_IMM or op = OP_REG;
     end;
 
-    function use_rs1(ir : std_logic_vector(31 downto 0)) return boolean is
+    function reads_rs1(ir : std_logic_vector(31 downto 0)) return boolean is
         variable op : std_logic_vector(6 downto 0);
     begin
-        op := opcode(ir);
-        return op = OP_JALR or op = OP_BRANCH or op = OP_LOAD
-            or op = OP_STORE or op = OP_IMM or op = OP_REG;
+        op := get_opcode(ir);
+        return op = OP_JALR or op = OP_BRANCH or op = OP_LOAD or op = OP_STORE or op = OP_IMM or op = OP_REG;
     end;
 
-    function use_rs2(ir : std_logic_vector(31 downto 0)) return boolean is
+    function reads_rs2(ir : std_logic_vector(31 downto 0)) return boolean is
         variable op : std_logic_vector(6 downto 0);
     begin
-        op := opcode(ir);
+        op := get_opcode(ir);
         return op = OP_BRANCH or op = OP_STORE or op = OP_REG;
     end;
 
 begin
     -- stall if a producer in ID/EX or EX/MEM writes a reg the IF/ID instr reads
-    stall_detect: process(ifid_ir, idex_ir, exmem_ir)
-        variable r1, r2, exd, md    :   integer;
-        variable need               :   boolean;
+    stall_detect: process(fetch_ir, decode_ir, execute_ir)
+        variable r1, r2, ex_dest, mem_dest  :   integer;
+        variable do_stall   :   boolean;
     begin
-        r1  := rs1_i(ifid_ir);
-        r2  := rs2_i(ifid_ir);
-        exd := rd_i(idex_ir);
-        md  := rd_i(exmem_ir);
-        need := false;
+        r1          :=  get_rs1(fetch_ir);
+        r2          :=  get_rs2(fetch_ir);
+        ex_dest     :=  get_rd(decode_ir);
+        mem_dest    :=  get_rd(execute_ir);
+        do_stall    :=  false;
 
-        if wr_rd(idex_ir) then
-            if use_rs1(ifid_ir) and r1 /= 0 and r1 = exd then need := true; end if;
-            if use_rs2(ifid_ir) and r2 /= 0 and r2 = exd then need := true; end if;
+        if writes_reg(decode_ir) then
+            if reads_rs1(fetch_ir) and r1 /= 0 and r1 = ex_dest then
+                do_stall := true;
+            end if;
+            if reads_rs2(fetch_ir) and r2 /= 0 and r2 = ex_dest then
+                do_stall := true;
+            end if;
         end if;
-        if wr_rd(exmem_ir) then
-            if use_rs1(ifid_ir) and r1 /= 0 and r1 = md then need := true; end if;
-            if use_rs2(ifid_ir) and r2 /= 0 and r2 = md then need := true; end if;
+
+        if writes_reg(execute_ir) then
+            if reads_rs1(fetch_ir) and r1 /= 0 and r1 = mem_dest then
+                do_stall := true;
+            end if;
+            if reads_rs2(fetch_ir) and r2 /= 0 and r2 = mem_dest then
+                do_stall := true;
+            end if;
         end if;
 
         -- store-then-load: hold the load one cycle so dmem_driver can
         -- pre-issue its read without colliding with the store
-        if opcode(idex_ir) = OP_STORE and opcode(ifid_ir) = OP_LOAD then
-            need := true;
+        if get_opcode(decode_ir) = OP_STORE and get_opcode(fetch_ir) = OP_LOAD then
+            do_stall := true;
         end if;
 
-        if need then stall <= '1'; else stall <= '0'; end if;
+        if do_stall then stall <= '1'; else stall <= '0'; end if;
     end process;
 
     -- flush on taken branch or any jump in EX/MEM
     flush <= '1' when
-        (opcode(exmem_ir) = OP_BRANCH and exmem_cond = '1')
-        or opcode(exmem_ir) = OP_JAL
-        or opcode(exmem_ir) = OP_JALR
+        (get_opcode(execute_ir) = OP_BRANCH and branch_taken = '1')
+        or get_opcode(execute_ir) = OP_JAL
+        or get_opcode(execute_ir) = OP_JALR
         else '0';
-end comb;
+end hazards;

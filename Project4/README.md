@@ -1,7 +1,6 @@
 # Project 4 - Pipelined RISC-V
 
-5-stage pipelined RV32I subset + `mul` (RV32M), in VHDL. Hazard detection
-stalls in ID, no forwarding. Branches resolve in EX, take effect in MEM.
+5-stage pipelined RV32I subset (RV32M), in VHDL. Hazard detection stalls in ID, no forwarding. Branches resolve in EX, take effect in MEM.
 
 ## Layout
 
@@ -83,8 +82,6 @@ program.
 
 ## Instructions implemented
 
-The 23 from the assignment Appendix plus `mul`:
-
 ```
 add  sub  mul  or   and  sll  srl  sra
 addi xori ori  andi slti
@@ -102,8 +99,14 @@ the decoding fell out of the same case statements.
 
 - imem and dmem are each 4 banks of `memory.vhd` (one byte lane each).
 - `memory.vhd` has 1-cycle read latency, so `imem_addr` is driven from
-  `pc_nxt` (one ahead of `pc`) and `fetch_valid` covers the bubble after
-  reset and after a flush.
-- The regfile writes on the falling edge, so a producer in WB is visible
-  to the consumer in ID the same cycle. That's why the hazard detector
-  doesn't have to stall on a MEM/WB producer.
+  `pc_next` (one ahead of `pc`) to pre-fetch the next instruction.
+  `fetch_valid` inserts a one-cycle NOP into IF/ID after reset or flush
+  while imem catches up. Approach taken from the Teams thread on memory
+  timing constraints.
+- the regfile writes on the falling edge, so a producer in WB is visible
+  to the consumer in ID the same cycle. The hazard detector therefore
+  only needs to check ID/EX and EX/MEM producers, not MEM/WB.
+- the hazard unit also stalls on a store followed immediately by a load
+  regardless of address to prevent `dmem_access` from issuing a read while
+  a write is still in progress.
+- no forwarding is implemented => all hazards are resolved by stalling.

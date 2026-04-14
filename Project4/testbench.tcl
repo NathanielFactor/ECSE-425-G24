@@ -1,10 +1,5 @@
-# ECSE 425 P4 run script. Usage: vsim -do testbench.tcl
-#
-# Reads program.txt, writes register_file.txt and memory.txt next to this
-# script. Outputs the dumps after the processor has run for 10000 cycles.
-
-# work from this script's own directory so relative paths resolve
-cd [file dirname [file normalize [info script]]]
+# ECSE 425 P4 run script.
+# Run from Project4/: vsim -do testbench.tcl
 
 vlib work
 
