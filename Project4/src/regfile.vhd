@@ -26,7 +26,7 @@ entity regfile is
     );
 end regfile;
 
-architecture rtl of regfile is
+architecture registry of regfile is
     type reg_array_t is array(0 to 31) of std_logic_vector(31 downto 0);
     signal regs : reg_array_t := (others => (others => '0'));
 begin
@@ -45,4 +45,4 @@ begin
     rs1_data  <= (others => '0') when rs1_addr  = 0 else regs(rs1_addr);
     rs2_data  <= (others => '0') when rs2_addr  = 0 else regs(rs2_addr);
     dump_data <= (others => '0') when dump_addr = 0 else regs(dump_addr);
-end rtl;
+end registry;

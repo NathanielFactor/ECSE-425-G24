@@ -1,9 +1,8 @@
--- 5-stage pipelined RISC-V (RV32I subset + mul). Hazard detection, no
--- forwarding. Branches resolve in EX, flush at MEM.
+-- 5-stage pipelined RISC-V. Hazard detection, no forwarding. Branches resolve in EX, flush at MEM.
 --
 -- imem and dmem are each 4 banks of memory.vhd (one byte lane per bank).
--- Memory has 1-cycle read latency, so imem_addr is driven from pc_nxt
--- (one ahead of pc) and fetch_valid covers the bubble after reset/flush.
+-- Implementation of the pc_next/fetch_valid solution discussed in Teams to handle the 1-cycle IMEM latency
+-- fetch_valid inserts a one-cycle NOP into IF/ID after reset or flush while imem catches up.
  
 library ieee;
 use ieee.std_logic_1164.all;
@@ -23,7 +22,7 @@ entity processor is
     );
 end processor;
 
-architecture arch of processor is
+architecture cpu of processor is
 
     -- components
     component memory is
@@ -76,10 +75,10 @@ architecture arch of processor is
 
     component hazard_control is
         port(
-            ifid_ir    : in  std_logic_vector(31 downto 0);
-            idex_ir    : in  std_logic_vector(31 downto 0);
-            exmem_ir   : in  std_logic_vector(31 downto 0);
-            exmem_cond : in  std_logic;
+            fetch_ir    : in  std_logic_vector(31 downto 0);
+            decode_ir    : in  std_logic_vector(31 downto 0);
+            execute_ir   : in  std_logic_vector(31 downto 0);
+            branch_taken    : in  std_logic;
             stall      : out std_logic;
             flush      : out std_logic
         );
@@ -87,8 +86,7 @@ architecture arch of processor is
 
     constant IMEM_BANK_SIZE : integer := INSTR_RAM_SIZE / 4;
     constant DMEM_BANK_SIZE : integer := DATA_RAM_SIZE / 4;
-    constant NOP            : std_logic_vector(31 downto 0) := x"00000013";  -- addi x0,x0,0
-
+    constant NOP            : std_logic_vector(31 downto 0) := x"00000013"; -- addi x0,x0,0
     constant OP_JAL   : std_logic_vector(6 downto 0) := "1101111";
     constant OP_JALR  : std_logic_vector(6 downto 0) := "1100111";
     constant OP_LOAD  : std_logic_vector(6 downto 0) := "0000011";
@@ -98,53 +96,53 @@ architecture arch of processor is
     type bank_addr_dmem is array(0 to 3) of integer range 0 to DMEM_BANK_SIZE-1;
     type bank_byte      is array(0 to 3) of std_logic_vector(7 downto 0);
 
-    -- imem port signals (driven by imem_mux: loader or fetch)
+    -- imem port signals (imem_mux: loader or fetch)
     signal imem_addr  : bank_addr_imem := (others => 0);
     signal imem_wdata : bank_byte := (others => (others => '0'));
-    signal imem_we    : std_logic_vector(3 downto 0) := "0000";
-    signal imem_re    : std_logic_vector(3 downto 0) := "0000";
+    signal imem_write    : std_logic_vector(3 downto 0) := "0000";
+    signal imem_read    : std_logic_vector(3 downto 0) := "0000";
     signal imem_rdata : bank_byte;
     signal imem_wait  : std_logic_vector(3 downto 0);
 
     -- loader-side signals (program load phase only)
     signal load_addr  : bank_addr_imem := (others => 0);
     signal load_wdata : bank_byte := (others => (others => '0'));
-    signal load_we    : std_logic_vector(3 downto 0) := "0000";
+    signal load_write    : std_logic_vector(3 downto 0) := "0000";
 
     -- dmem
     signal dmem_addr  : bank_addr_dmem := (others => 0);
     signal dmem_wdata : bank_byte := (others => (others => '0'));
-    signal dmem_we    : std_logic_vector(3 downto 0) := "0000";
-    signal dmem_re    : std_logic_vector(3 downto 0) := "0000";
+    signal dmem_write    : std_logic_vector(3 downto 0) := "0000";
+    signal dmem_read    : std_logic_vector(3 downto 0) := "0000";
     signal dmem_rdata : bank_byte;
     signal dmem_wait  : std_logic_vector(3 downto 0);
 
     -- PC
     signal pc          : unsigned(31 downto 0) := (others => '0');
-    signal pc_nxt      : unsigned(31 downto 0);
+    signal pc_next      : unsigned(31 downto 0);
     signal fetch_valid : std_logic := '0';
 
     -- pipeline latches
     signal ifid_pc  : unsigned(31 downto 0) := (others => '0');
     signal ifid_npc : unsigned(31 downto 0) := (others => '0');
-    signal ifid_ir  : std_logic_vector(31 downto 0) := NOP;
+    signal fetch_ir  : std_logic_vector(31 downto 0) := NOP;
 
     signal idex_pc  : unsigned(31 downto 0) := (others => '0');
     signal idex_npc : unsigned(31 downto 0) := (others => '0');
-    signal idex_ir  : std_logic_vector(31 downto 0) := NOP;
+    signal decode_ir  : std_logic_vector(31 downto 0) := NOP;
     signal idex_a   : std_logic_vector(31 downto 0) := (others => '0');
     signal idex_b   : std_logic_vector(31 downto 0) := (others => '0');
     signal idex_imm : std_logic_vector(31 downto 0) := (others => '0');
 
-    signal exmem_ir   : std_logic_vector(31 downto 0) := NOP;
+    signal execute_ir   : std_logic_vector(31 downto 0) := NOP;
     signal exmem_alu  : std_logic_vector(31 downto 0) := (others => '0');
     signal exmem_b    : std_logic_vector(31 downto 0) := (others => '0');
-    signal exmem_cond : std_logic := '0';
+    signal branch_taken    : std_logic := '0';
     signal exmem_npc  : unsigned(31 downto 0) := (others => '0');
 
     signal memwb_ir  : std_logic_vector(31 downto 0) := NOP;
     signal memwb_alu : std_logic_vector(31 downto 0) := (others => '0');
-    signal memwb_lmd : std_logic_vector(31 downto 0) := (others => '0');
+    signal memwb_load : std_logic_vector(31 downto 0) := (others => '0');
 
     -- control
     signal stall_sig : std_logic;
@@ -202,8 +200,8 @@ begin
                 clock => clock,
                 writedata => imem_wdata(k),
                 address => imem_addr(k),
-                memwrite => imem_we(k),
-                memread => imem_re(k),
+                memwrite => imem_write(k),
+                memread => imem_read(k),
                 readdata => imem_rdata(k),
                 waitrequest => imem_wait(k));
     end generate;
@@ -219,33 +217,33 @@ begin
                 clock => clock,
                 writedata => dmem_wdata(k),
                 address => dmem_addr(k),
-                memwrite => dmem_we(k),
-                memread => dmem_re(k),
+                memwrite => dmem_write(k),
+                memread => dmem_read(k),
                 readdata => dmem_rdata(k),
                 waitrequest => dmem_wait(k));
     end generate;
 
     -- imem_addr mux: loader writes during prog_loading, fetch reads after.
     -- single driver for imem_addr.
-    imem_mux: process(prog_loading, load_addr, load_wdata, load_we, pc_nxt)
+    imem_mux: process(prog_loading, load_addr, load_wdata, load_write, pc_next)
         variable widx : integer;
     begin
         if prog_loading = '1' then
             for k in 0 to 3 loop
                 imem_addr(k)  <= load_addr(k);
                 imem_wdata(k) <= load_wdata(k);
-                imem_we(k)    <= load_we(k);
-                imem_re(k)    <= '0';
+                imem_write(k) <= load_write(k);
+                imem_read(k)  <= '0';
             end loop;
         else
-            -- drive address from pc_nxt so memory has it registered by the
+            -- drive address from pc_next so memory has it registered by the
             -- time pc actually advances (memory has 1-cycle read latency)
-            widx := to_integer(pc_nxt(11 downto 2));
+            widx := to_integer(pc_next(11 downto 2));
             for k in 0 to 3 loop
                 imem_addr(k)  <= widx;
                 imem_wdata(k) <= (others => '0');
-                imem_we(k)    <= '0';
-                imem_re(k)    <= '1';
+                imem_write(k)    <= '0';
+                imem_read(k)    <= '1';
             end loop;
         end if;
     end process;
@@ -253,8 +251,8 @@ begin
     rf: regfile
         port map(
             clock => clock, reset => reset,
-            rs1_addr => f_rs1(ifid_ir),
-            rs2_addr => f_rs2(ifid_ir),
+            rs1_addr => f_rs1(fetch_ir),
+            rs2_addr => f_rs2(fetch_ir),
             rs1_data => id_rs1_data,
             rs2_data => id_rs2_data,
             wr_en => wb_wr_en,
@@ -265,9 +263,9 @@ begin
 
     alu_unit: alu
         port map(
-            id_ir => ifid_ir,
+            id_ir => fetch_ir,
             id_imm => id_imm_data,
-            ex_ir => idex_ir,
+            ex_ir => decode_ir,
             ex_a => idex_a,
             ex_b => idex_b,
             ex_imm => idex_imm,
@@ -277,10 +275,10 @@ begin
 
     hc: hazard_control
         port map(
-            ifid_ir => ifid_ir,
-            idex_ir => idex_ir,
-            exmem_ir => exmem_ir,
-            exmem_cond => exmem_cond,
+            fetch_ir => fetch_ir,
+            decode_ir => decode_ir,
+            execute_ir => execute_ir,
+            branch_taken => branch_taken,
             stall => stall_sig,
             flush => flush_sig);
 
@@ -288,20 +286,20 @@ begin
     pc_next_mux: process(pc, stall_sig, flush_sig, exmem_alu, fetch_valid, ifid_npc)
     begin
         if flush_sig = '1' then
-            pc_nxt <= unsigned(exmem_alu);    -- branch/jump target
+            pc_next <= unsigned(exmem_alu);    -- branch/jump target
         elsif stall_sig = '1' then
-            pc_nxt <= ifid_npc;               -- refetch same instr
+            pc_next <= ifid_npc;               -- refetch same instr
         elsif fetch_valid = '0' then
-            pc_nxt <= pc;                     -- wait for imem
+            pc_next <= pc;                     -- wait for imem
         else
-            pc_nxt <= pc + 4;
+            pc_next <= pc + 4;
         end if;
     end process;
 
     -- single driver for dmem_addr/wdata/we/re. Two phases:
     --   run:  drive store lanes from EX/MEM, pre-issue load reads from ID/EX
-    --   dump: walk addresses 0..8191, dump_proc reads back through dmem_rdata
-    dmem_driver: process
+    --   dump: walk addresses 0..8191, dump_output reads back through dmem_rdata
+    dmem_access: process
         variable op       : std_logic_vector(6 downto 0);
         variable word_idx : integer;
         variable byte_off : integer;
@@ -312,47 +310,47 @@ begin
             for k in 0 to 3 loop
                 dmem_addr(k) <= 0;
                 dmem_wdata(k) <= (others => '0');
-                dmem_we(k) <= '0';
-                dmem_re(k) <= '0';
+                dmem_write(k) <= '0';
+                dmem_read(k) <= '0';
             end loop;
 
-            op := f_opcode(exmem_ir);
+            op := f_opcode(execute_ir);
 
             if op = OP_STORE then
                 word_idx := to_integer(unsigned(exmem_alu(14 downto 2)));
                 byte_off := to_integer(unsigned(exmem_alu(1 downto 0)));
-                case f_funct3(exmem_ir) is
+                case f_funct3(execute_ir) is
                     when "000" =>
                         dmem_addr(byte_off) <= word_idx;
                         dmem_wdata(byte_off) <= exmem_b(7 downto 0);
-                        dmem_we(byte_off) <= '1';
+                        dmem_write(byte_off) <= '1';
                     when "001" =>
                         dmem_addr(byte_off) <= word_idx;
                         dmem_wdata(byte_off) <= exmem_b(7 downto 0);
-                        dmem_we(byte_off) <= '1';
+                        dmem_write(byte_off) <= '1';
                         dmem_addr(byte_off + 1) <= word_idx;
                         dmem_wdata(byte_off + 1) <= exmem_b(15 downto 8);
-                        dmem_we(byte_off + 1) <= '1';
+                        dmem_write(byte_off + 1) <= '1';
                     when "010" =>
                         for k in 0 to 3 loop
                             dmem_addr(k) <= word_idx;
                             dmem_wdata(k) <= exmem_b(k*8+7 downto k*8);
-                            dmem_we(k) <= '1';
+                            dmem_write(k) <= '1';
                         end loop;
                     when others => null;
                 end case;
             else
-                if f_opcode(idex_ir) = OP_LOAD then
+                if f_opcode(decode_ir) = OP_LOAD then
                     word_idx := to_integer(unsigned(ex_alu_result(14 downto 2)));
                     for k in 0 to 3 loop
                         dmem_addr(k) <= word_idx;
-                        dmem_re(k) <= '1';
+                        dmem_read(k) <= '1';
                     end loop;
                 elsif op = OP_LOAD then
                     word_idx := to_integer(unsigned(exmem_alu(14 downto 2)));
                     for k in 0 to 3 loop
                         dmem_addr(k) <= word_idx;
-                        dmem_re(k) <= '1';
+                        dmem_read(k) <= '1';
                     end loop;
                 end if;
             end if;
@@ -364,8 +362,8 @@ begin
         for i in 0 to 8191 loop
             for k in 0 to 3 loop
                 dmem_addr(k) <= i;
-                dmem_re(k) <= '1';
-                dmem_we(k) <= '0';
+                dmem_read(k) <= '1';
+                dmem_write(k) <= '0';
             end loop;
             wait until rising_edge(clock);
         end loop;
@@ -373,22 +371,22 @@ begin
 
         for k in 0 to 3 loop
             dmem_addr(k) <= 0;
-            dmem_re(k) <= '0';
+            dmem_read(k) <= '0';
         end loop;
         wait;
     end process;
 
     -- glue four byte lanes into the 32-bit load result, with the right
     -- sub-word slice and sign/zero extension per funct3
-    mem_load_assemble: process(exmem_ir, exmem_alu, dmem_rdata)
+    mem_load_assemble: process(execute_ir, exmem_alu, dmem_rdata)
         variable f3       : std_logic_vector(2 downto 0);
         variable byte_off : integer;
         variable b0, b1   : std_logic_vector(7 downto 0);
         variable rdata    : std_logic_vector(31 downto 0);
     begin
         rdata := (others => '0');
-        if f_opcode(exmem_ir) = OP_LOAD then
-            f3 := f_funct3(exmem_ir);
+        if f_opcode(execute_ir) = OP_LOAD then
+            f3 := f_funct3(execute_ir);
             byte_off := to_integer(unsigned(exmem_alu(1 downto 0)));
             case f3 is
                 when "000" =>
@@ -407,17 +405,16 @@ begin
                     b1 := dmem_rdata(byte_off + 1);
                     rdata(15 downto 0) := b1 & b0;
                 when "010" =>
-                    rdata := dmem_rdata(3) & dmem_rdata(2)
-                           & dmem_rdata(1) & dmem_rdata(0);
+                    rdata := dmem_rdata(3) & dmem_rdata(2) & dmem_rdata(1) & dmem_rdata(0);
                 when others => null;
             end case;
         end if;
         mem_load_data <= rdata;
     end process;
 
-    -- WB mux. loads -> memwb_lmd, jal/jalr -> link (also in memwb_lmd),
+    -- WB mux. loads -> memwb_load, jal/jalr -> link (also in memwb_load),
     -- everything else -> alu result. writes_rd() handles the rd=x0 case.
-    wb_select: process(memwb_ir, memwb_alu, memwb_lmd)
+    writeback: process(memwb_ir, memwb_alu, memwb_load)
         variable op : std_logic_vector(6 downto 0);
     begin
         op := f_opcode(memwb_ir);
@@ -428,7 +425,7 @@ begin
         if writes_rd(memwb_ir) then
             wb_wr_en <= '1';
             if op = OP_LOAD or op = OP_JAL or op = OP_JALR then
-                wb_rd_data <= memwb_lmd;
+                wb_rd_data <= memwb_load;
             else
                 wb_rd_data <= memwb_alu;
             end if;
@@ -443,50 +440,65 @@ begin
         if reset = '1' then
             pc <= (others => '0');
             fetch_valid <= '0';
-            ifid_ir <= NOP; ifid_pc <= (others => '0'); ifid_npc <= (others => '0');
-            idex_ir <= NOP; idex_pc <= (others => '0'); idex_npc <= (others => '0');
-            idex_a <= (others => '0'); idex_b <= (others => '0'); idex_imm <= (others => '0');
-            exmem_ir <= NOP; exmem_alu <= (others => '0'); exmem_b <= (others => '0');
-            exmem_cond <= '0'; exmem_npc <= (others => '0');
-            memwb_ir <= NOP; memwb_alu <= (others => '0'); memwb_lmd <= (others => '0');
+            -- reset fetch
+            fetch_ir <= NOP;
+            ifid_pc <= (others => '0');
+            ifid_npc <= (others => '0');
+            -- reset decode
+            decode_ir <= NOP;
+            idex_pc <= (others => '0');
+            idex_npc <= (others => '0');
+            idex_a <= (others => '0');
+            idex_b <= (others => '0');
+            idex_imm <= (others => '0');
+            -- reset execute
+            execute_ir <= NOP;
+            exmem_alu <= (others => '0');
+            exmem_b <= (others => '0');
+            branch_taken <= '0';
+            exmem_npc <= (others => '0');
+            -- reset writeback
+            memwb_ir <= NOP;
+            memwb_alu <= (others => '0');
+            memwb_load <= (others => '0');
 
         elsif rising_edge(clock) then
 
             -- MEM/WB
-            memwb_ir <= exmem_ir;
+            memwb_ir <= execute_ir;
             memwb_alu <= exmem_alu;
-            memwb_lmd <= mem_load_data;
-            -- jal/jalr: stash PC+4 in lmd so wb_select picks it up as the link
-            if f_opcode(exmem_ir) = OP_JAL or
-               f_opcode(exmem_ir) = OP_JALR then
-                memwb_lmd <= std_logic_vector(exmem_npc);
+            memwb_load <= mem_load_data;
+            -- jal/jalr: stash PC+4 in memwb_load so writeback picks it up as the link
+            if f_opcode(execute_ir) = OP_JAL or
+               f_opcode(execute_ir) = OP_JALR then
+                memwb_load <= std_logic_vector(exmem_npc);
             end if;
 
             -- EX/MEM
             if flush_sig = '1' then
-                exmem_ir <= NOP;
+                execute_ir <= NOP;
                 exmem_alu <= (others => '0');
                 exmem_b <= (others => '0');
-                exmem_cond <= '0';
+                branch_taken <= '0';
                 exmem_npc <= (others => '0');
             else
-                exmem_ir <= idex_ir;
+                execute_ir <= decode_ir;
                 exmem_alu <= ex_alu_result;
                 exmem_b <= idex_b;
-                exmem_cond <= ex_branch_cond;
+                branch_taken <= ex_branch_cond;
                 exmem_npc <= idex_npc;
             end if;
 
             -- ID/EX
             if flush_sig = '1' or stall_sig = '1' then
-                idex_ir <= NOP;
+                decode_ir <= NOP;
                 idex_pc <= (others => '0');
                 idex_npc <= (others => '0');
                 idex_a <= (others => '0');
                 idex_b <= (others => '0');
                 idex_imm <= (others => '0');
             else
-                idex_ir <= ifid_ir;
+                decode_ir <= fetch_ir;
                 idex_pc <= ifid_pc;
                 idex_npc <= ifid_npc;
                 idex_a <= id_rs1_data;
@@ -496,28 +508,28 @@ begin
 
             -- IF/ID
             if flush_sig = '1' then
-                ifid_ir <= NOP;
+                fetch_ir <= NOP;
                 ifid_pc <= (others => '0');
                 ifid_npc <= (others => '0');
                 fetch_valid <= '0';
             elsif stall_sig = '1' then
                 null;  -- hold
             elsif fetch_valid = '0' then
-                -- one bubble after reset/flush while imem catches up
-                ifid_ir <= NOP;
+                -- imem needs one cycle to fetch so insert nop
+                fetch_ir <= NOP;
                 ifid_pc <= (others => '0');
                 ifid_npc <= (others => '0');
                 fetch_valid <= '1';
             else
-                ifid_ir(7  downto 0) <= imem_rdata(0);
-                ifid_ir(15 downto 8) <= imem_rdata(1);
-                ifid_ir(23 downto 16) <= imem_rdata(2);
-                ifid_ir(31 downto 24) <= imem_rdata(3);
+                fetch_ir(7  downto 0) <= imem_rdata(0);
+                fetch_ir(15 downto 8) <= imem_rdata(1);
+                fetch_ir(23 downto 16) <= imem_rdata(2);
+                fetch_ir(31 downto 24) <= imem_rdata(3);
                 ifid_pc <= pc;
                 ifid_npc <= pc + 4;
             end if;
 
-            pc <= pc_nxt;
+            pc <= pc_next;
 
         end if;
     end process;
@@ -551,11 +563,11 @@ begin
                     for k in 0 to 3 loop
                         load_addr(k) <= widx;
                         load_wdata(k) <= w(k*8+7 downto k*8);
-                        load_we(k) <= '1';
+                        load_write(k) <= '1';
                     end loop;
                     wait until rising_edge(clock);
                     for k in 0 to 3 loop
-                        load_we(k) <= '0';
+                        load_write(k) <= '0';
                     end loop;
                     a := a + 4;
                 end if;
@@ -563,7 +575,7 @@ begin
         end loop;
         file_close(f);
         for k in 0 to 3 loop
-            load_we(k)    <= '0';
+            load_write(k)    <= '0';
             load_wdata(k) <= (others => '0');
             load_addr(k)  <= 0;
         end loop;
@@ -573,12 +585,12 @@ begin
 
     -- write register_file.txt (32 lines) and memory.txt (8192 lines).
     -- regfile dump is combinational. memory dump rendezvous-es with
-    -- dmem_driver via `dumping` and reads one address per clock edge.
-    dump_proc: process
-        file     rf_file : text;
-        file     dm_file : text;
-        variable l       : line;
-        variable w       : std_logic_vector(31 downto 0);
+    -- dmem_access via `dumping` and reads one address per clock edge.
+    dump_output: process
+        file rf_file : text;
+        file dm_file : text;
+        variable l   : line;
+        variable w   : std_logic_vector(31 downto 0);
     begin
         done <= '0';
         wait until dump = '1';
@@ -624,4 +636,4 @@ begin
         wait;
     end process;
 
-end arch;
+end cpu;

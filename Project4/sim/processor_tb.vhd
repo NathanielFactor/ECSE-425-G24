@@ -26,10 +26,7 @@ architecture tb of processor_tb is
     signal done  : std_logic;
     constant CLK_PERIOD : time := 1 ns;     -- 1 GHz
 begin
-    dut: processor
-        generic map(
-            DATA_RAM_SIZE => 32768,
-            INSTR_RAM_SIZE => 4096)
+    cpu: processor
         port map(
             clock => clk,
             reset => reset,
